@@ -32,7 +32,6 @@ class TasksCog(commands.Cog):
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
             except: continue
 
-            # Se passou 1 hora do evento, conclui
             if now > evt_time + datetime.timedelta(hours=1):
                 guild = self.bot.get_guild(event['guild_id'])
                 if guild:
@@ -57,10 +56,9 @@ class TasksCog(commands.Cog):
                 
                 await db.update_event_status(event['event_id'], 'completed')
 
-    # --- AQUI ESTÁ A MUDANÇA PARA 15 MINUTOS ---
+    # --- ATUALIZAÇÃO DE VAGAS/NOMES (15 min para evitar bloqueio) ---
     @tasks.loop(minutes=15)
     async def channel_rename_loop(self):
-        """Atualiza nomes dos canais (vagas, datas) em lote para evitar Rate Limit"""
         events = await db.get_active_events()
         for event in events:
             try:
@@ -80,13 +78,13 @@ class TasksCog(commands.Cog):
 
                 free_slots = max(0, event['max_slots'] - confirmed_count)
                 
-                # Gera o nome correto com os dados atuais
+                # Gera o nome atualizado (com vagas corretas)
                 new_name = utils.generate_channel_name(event['title'], evt_time, event['activity_type'], free_slots, description=event['description'])
                 
                 if channel.name != new_name:
                     await channel.edit(name=new_name)
             except Exception as e:
-                # Ignora erros de rate limit silenciosamente aqui, tentará novamente em 15 min
+                # Se der erro (ex: Rate Limit), ignora e tenta na próxima rodada
                 pass
 
     @tasks.loop(minutes=1)
