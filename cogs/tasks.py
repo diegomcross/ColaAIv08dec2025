@@ -32,6 +32,7 @@ class TasksCog(commands.Cog):
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
             except: continue
 
+            # Se passou 1 hora do evento, conclui
             if now > evt_time + datetime.timedelta(hours=1):
                 guild = self.bot.get_guild(event['guild_id'])
                 if guild:
@@ -56,8 +57,10 @@ class TasksCog(commands.Cog):
                 
                 await db.update_event_status(event['event_id'], 'completed')
 
-    @tasks.loop(minutes=10)
+    # --- AQUI ESTÁ A MUDANÇA PARA 15 MINUTOS ---
+    @tasks.loop(minutes=15)
     async def channel_rename_loop(self):
+        """Atualiza nomes dos canais (vagas, datas) em lote para evitar Rate Limit"""
         events = await db.get_active_events()
         for event in events:
             try:
@@ -77,12 +80,14 @@ class TasksCog(commands.Cog):
 
                 free_slots = max(0, event['max_slots'] - confirmed_count)
                 
-                # AQUI: Passamos a descrição para garantir que os emojis de modo se mantenham
+                # Gera o nome correto com os dados atuais
                 new_name = utils.generate_channel_name(event['title'], evt_time, event['activity_type'], free_slots, description=event['description'])
                 
                 if channel.name != new_name:
                     await channel.edit(name=new_name)
-            except: pass
+            except Exception as e:
+                # Ignora erros de rate limit silenciosamente aqui, tentará novamente em 15 min
+                pass
 
     @tasks.loop(minutes=1)
     async def reminders_loop(self):
