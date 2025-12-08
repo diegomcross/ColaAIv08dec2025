@@ -33,8 +33,8 @@ def format_datetime_for_embed(dt: datetime.datetime) -> Tuple[str, str]:
     return f"<t:{ts}:f>", f"<t:{ts}:R>"
 
 async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance: discord.Client) -> discord.Embed:
-    event_id = event_details['event_id']
-    guild_id = event_details['guild_id']
+    event_id = event_details.get('event_id', 'N/A')
+    guild_id = event_details.get('guild_id')
     guild = bot_instance.get_guild(guild_id)
 
     act_type_db = event_details.get('activity_type', 'OUTRO')
@@ -43,29 +43,34 @@ async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance:
     elif act_type_db == 'MASMORRA': color = discord.Color.orange()
     elif str(act_type_db).startswith("PVP") or act_type_db == 'PVP': color = discord.Color.red()
 
-    desc = f"**{event_details['description']}**" if event_details.get('description') else "*Nenhuma descrição fornecida.*"
-    embed = discord.Embed(title=event_details['title'], description=desc, color=color)
+    desc = f"**{event_details.get('description', '')}**" if event_details.get('description') else "*Nenhuma descrição fornecida.*"
+    embed = discord.Embed(title=event_details.get('title', 'Evento'), description=desc, color=color)
 
-    raw_date = event_details['date_time']
+    # CORREÇÃO DO ERRO KEYERROR: Tenta 'date_time' e 'date'
+    raw_date = event_details.get('date_time', event_details.get('date'))
+    
     if isinstance(raw_date, str):
         try: dt_obj = datetime.datetime.fromisoformat(raw_date)
         except: dt_obj = datetime.datetime.now()
     else: dt_obj = raw_date
-    if dt_obj.tzinfo is None: dt_obj = BR_TIMEZONE.localize(dt_obj)
+    if dt_obj and dt_obj.tzinfo is None: dt_obj = BR_TIMEZONE.localize(dt_obj)
 
     fmt_date, rel_time = format_datetime_for_embed(dt_obj)
     embed.add_field(name="🗓️ Data e Hora", value=f"{fmt_date} ({rel_time})", inline=False)
     
-    display_type = act_type_db.capitalize()
+    display_type = act_type_db.capitalize() if act_type_db else "Outro"
     if act_type_db == 'RAID': display_type = "Incursão"
     embed.add_field(name="🎮 Tipo", value=display_type, inline=True)
 
-    creator_id = event_details['creator_id']
-    creator_display_name = await get_user_display_name_static(creator_id, bot_instance, guild)
-    try:
-        creator_user_obj = await bot_instance.fetch_user(creator_id)
-        creator_mention = creator_user_obj.mention
-    except: creator_mention = creator_display_name 
+    creator_id = event_details.get('creator_id')
+    if creator_id:
+        try:
+            creator_user_obj = await bot_instance.fetch_user(creator_id)
+            creator_mention = creator_user_obj.mention
+        except: creator_mention = f"<@{creator_id}>"
+    else:
+        creator_mention = "Desconhecido"
+    
     embed.add_field(name="👑 Organizador", value=creator_mention, inline=True)
 
     vou_user_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'confirmed']
@@ -115,77 +120,32 @@ async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance:
 # --- PARSING E DETECÇÃO ---
 
 def normalize_date_str(date_str: str) -> str:
-    """Corrige erros comuns e formata para o parser."""
     text = date_str.lower()
-    
-    # 1. Correção ortográfica de dias e palavras-chave
     replacements = {
-        r'\bterca\b': 'terça',
-        r'\bterça\b': 'terça-feira',
-        r'\bsegunda\b': 'segunda-feira',
-        r'\bquarta\b': 'quarta-feira',
-        r'\bquinta\b': 'quinta-feira',
-        r'\bsexta\b': 'sexta-feira',
-        r'\bsabado\b': 'sábado',
-        r'\bdomingo\b': 'domingo',
-        r'\bamanha\b': 'amanhã',
-        r'\bhoje\b': 'hoje',
+        r'\bterca\b': 'terça', r'\bterça\b': 'terça-feira',
+        r'\bsegunda\b': 'segunda-feira', r'\bquarta\b': 'quarta-feira',
+        r'\bquinta\b': 'quinta-feira', r'\bsexta\b': 'sexta-feira',
+        r'\bsabado\b': 'sábado', r'\bdomingo\b': 'domingo',
+        r'\bamanha\b': 'amanhã', r'\bhoje\b': 'hoje',
     }
     for pattern, repl in replacements.items():
         text = re.sub(pattern, repl, text)
-        
-    # 2. Forçar formato de hora explícito (ex: "20h" -> "20:00")
-    # Isso evita que o parser confunda "20h" com "dia 20"
-    # Regex busca números seguidos de 'h' isolados ou no final
     text = re.sub(r'(\d{1,2})[hH](?!\w)', r'\1:00', text)
-    text = re.sub(r'(\d{1,2})[hH](\d{2})', r'\1:\2', text) # 20h30 -> 20:30
-    
+    text = re.sub(r'(\d{1,2})[hH](\d{2})', r'\1:\2', text)
     return text
 
 def parse_human_date(date_str: str) -> Optional[datetime.datetime]:
     if not date_str: return None
-    
-    # Limpeza
     clean_date_str = normalize_date_str(date_str)
     print(f"[DEBUG] Data normalizada para parser: '{clean_date_str}'")
-    
     now = datetime.datetime.now(BR_TIMEZONE)
-    
-    # Configurações ajustadas para priorizar formato BR
-    settings = {
-        'PREFER_DATES_FROM': 'future',
-        'RELATIVE_BASE': now.replace(tzinfo=None),
-        'TIMEZONE': 'America/Sao_Paulo',
-        'RETURN_AS_TIMEZONE_AWARE': True,
-        'DATE_ORDER': 'DMY',
-        'PREFER_DAY_OF_MONTH': 'current', # Tenta evitar pular para o dia N do mês seguinte se for ambíguo
-    }
-    
+    settings = {'PREFER_DATES_FROM': 'future', 'RELATIVE_BASE': now.replace(tzinfo=None), 'TIMEZONE': 'America/Sao_Paulo', 'RETURN_AS_TIMEZONE_AWARE': True, 'DATE_ORDER': 'DMY', 'PREFER_DAY_OF_MONTH': 'current'}
     dt = dateparser.parse(clean_date_str, settings=settings, languages=['pt'])
-    
-    if not dt:
-        print("[DEBUG] Falha no dateparser")
-        return None
-    
-    # Garantir Fuso Horário
-    if dt.tzinfo is None:
-        dt = BR_TIMEZONE.localize(dt)
-    
-    # Correção de Ano Que Vem (Safety)
-    # Se a data for > 180 dias no futuro, provavelmente foi um erro de interpretação
+    if not dt: return None
+    if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
     if (dt - now).days > 180:
-        print("[DEBUG] Data muito distante, tentando ajustar ano...")
         try_year_current = dt.replace(year=now.year)
-        
-        # Se ajustar para este ano resultar numa data passada (ex: hoje é 10/12, input "09/12"), 
-        # o parser pode ter jogado pro ano que vem corretamente.
-        # Mas para dias da semana ("terça"), geralmente queremos a próxima.
-        
-        # Lógica: Se a data ajustada para este ano é no futuro, usa ela.
-        if try_year_current > now:
-            dt = try_year_current
-        # Se é no passado, e a original era ano que vem, mantemos a original OU ajustamos para semana que vem se for muito longe.
-        
+        if try_year_current > now: dt = try_year_current
     print(f"[DEBUG] Data final interpretada: {dt}")
     return dt
 
@@ -210,7 +170,6 @@ def detect_activity_details(user_input: str) -> Tuple[str, str, int]:
 
 def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free_slots: int, description: str = "") -> str:
     emoji1 = ACTIVITY_EMOJIS.get(type_key, ACTIVITY_EMOJIS['OUTRO'])
-    
     emoji2 = ""
     search_text = (title + " " + description).lower()
     for keyword, icon in ACTIVITY_MODES.items():
@@ -243,3 +202,26 @@ def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free
         name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{date_str}"
         
     return name[:100]
+
+# --- NOVO: Formata nome bonito para enquete (Ex: Câmara de Cristal (Mestre) 💀⭐) ---
+def format_activity_name(raw_name: str) -> str:
+    official_name, type_key, _ = detect_activity_details(raw_name)
+    emoji1 = ACTIVITY_EMOJIS.get(type_key, "")
+    
+    emoji2 = ""
+    search_text = raw_name.lower()
+    mode_str = ""
+    for keyword, icon in ACTIVITY_MODES.items():
+        if keyword in search_text:
+            emoji2 = icon
+            mode_str = f" ({keyword.capitalize()})"
+            break
+            
+    return f"{official_name}{mode_str} {emoji1}{emoji2}".strip()
+
+# --- NOVO: Limpa nome do votante (Só letras, primeira palavra) ---
+def clean_voter_name(display_name: str) -> str:
+    first_word = display_name.split()[0]
+    # Remove tudo que não for letra (a-z, A-Z, acentos básicos em pt)
+    cleaned = re.sub(r'[^a-zA-Z\u00C0-\u00FF]', '', first_word)
+    return cleaned if cleaned else "User"
