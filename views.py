@@ -54,17 +54,14 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
         official_name, act_type, slots = utils.detect_activity_details(new_title)
         if slots is None: slots = self.event_data['max_slots'] or 6
         
-        # Verifica se a data mudou para enviar notificação específica
+        # Verifica mudança de data
         old_date_str = self.date_input.default
         new_date_str = new_dt.strftime("%d/%m %H:%M")
-        
-        # Mensagem padrão
-        msg_notification = f"📝 **Evento Editado:** O evento **{official_name}** foi alterado por {interaction.user.display_name}."
-        
-        # Se a data mudou, muda a mensagem e avisa no canal
         date_changed = old_date_str != new_date_str
+        
+        msg_notification = f"📝 **Evento Editado:** O evento **{official_name}** foi alterado por {interaction.user.display_name}."
         if date_changed:
-             msg_notification = f"📅 **DATA ALTERADA:** O evento **{official_name}** foi remarcado para **{new_dt.strftime('%d/%m às %H:%M')}** por {interaction.user.display_name}. Verifique sua disponibilidade!"
+             msg_notification = f"📅 **DATA ALTERADA:** O evento **{official_name}** foi remarcado para **{new_dt.strftime('%d/%m às %H:%M')}** por {interaction.user.display_name}."
 
         # Atualizar DB
         await db.update_event_details(
@@ -74,7 +71,7 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
         # Notificar via DM
         await notify_confirmed_users(interaction, self.event_data['event_id'], msg_notification)
         
-        # Atualizar Visual (Embed)
+        # Atualizar Visual
         event = await db.get_event(self.event_data['event_id'])
         rsvps = await db.get_rsvps(self.event_data['event_id'])
         
@@ -85,14 +82,25 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
                 msg = await channel.fetch_message(event['message_id'])
                 await msg.edit(embed=embed)
                 
-                # Avisar no chat do evento se a data mudou
+                # --- AQUI: Renomear Imediatamente (Prioridade para Edição Manual) ---
+                # Como a data mudou, o nome do canal ESTÁ ERRADO. Precisamos tentar corrigir agora.
+                confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
+                free_slots = max(0, slots - confirmed_count)
+                new_name = utils.generate_channel_name(official_name, new_dt, act_type, free_slots, description=self.desc_input.value)
+                
+                if channel.name != new_name:
+                    try:
+                        await channel.edit(name=new_name)
+                    except Exception as e:
+                        print(f"[DEBUG] Rate Limit ao renomear canal na edição: {e}")
+
+                # Avisar no chat do evento
                 if date_changed:
                     await channel.send(f"📢 {interaction.user.mention} alterou a data deste evento para **{new_dt.strftime('%d/%m às %H:%M')}**!")
                     
-                await interaction.followup.send("✅ Evento atualizado! (O nome do canal será atualizado em breve)", ephemeral=True)
+                await interaction.followup.send("✅ Evento atualizado com sucesso!", ephemeral=True)
             except Exception as e:
-                print(f"Erro visual ao editar evento: {e}")
-                await interaction.followup.send(f"Salvo, mas houve um erro visual: {e}", ephemeral=True)
+                await interaction.followup.send(f"Evento salvo, mas houve erro visual: {e}", ephemeral=True)
 
 # --- VIEW PRINCIPAL ---
 class PersistentRsvpView(discord.ui.View):
@@ -108,6 +116,7 @@ class PersistentRsvpView(discord.ui.View):
         waitlist = [r for r in rsvps if r['status'] == 'waitlist']
         slots = event['max_slots']
         
+        # Lógica de Lista de Espera Automática
         changed = False
         while len(confirmed) < slots and len(waitlist) > 0:
             lucky_user = waitlist.pop(0) 
@@ -117,11 +126,13 @@ class PersistentRsvpView(discord.ui.View):
         
         if changed: rsvps = await db.get_rsvps(event_id)
 
+        # Atualiza APENAS o Embed (Mensagem)
         embed = await utils.build_event_embed(dict(event), rsvps, interaction.client)
         await interaction.message.edit(embed=embed)
         
-        # REMOVIDO: A atualização do nome do canal agora é feita apenas pelo cogs/tasks.py
-        # para evitar Rate Limit do Discord.
+        # --- IMPORTANTE: NOME DO CANAL NÃO É ALTERADO AQUI ---
+        # A atualização das vagas no nome do canal (ex: "2vagas" -> "1vaga")
+        # será feita pelo loop de 15 minutos em tasks.py para evitar Rate Limit.
 
     async def handle_click(self, interaction: discord.Interaction, status: str):
         try:
@@ -139,6 +150,7 @@ class PersistentRsvpView(discord.ui.View):
         if status == 'confirmed':
             user_current = next((r for r in rsvps if r['user_id'] == interaction.user.id), None)
             is_confirmed = user_current and user_current['status'] == 'confirmed'
+            # Se cheio e não é um dos confirmados, vai pra espera
             if confirmed_count >= event['max_slots'] and not is_confirmed:
                 final_status = 'waitlist'
                 await interaction.response.send_message("Vagas cheias! Você foi para a **Lista de Espera**.", ephemeral=True)
@@ -149,6 +161,7 @@ class PersistentRsvpView(discord.ui.View):
 
         await db.update_rsvp(event_id, interaction.user.id, final_status)
         
+        # Atualiza cargos
         role = interaction.guild.get_role(event['role_id'])
         if role:
             try:
@@ -167,7 +180,6 @@ class PersistentRsvpView(discord.ui.View):
             if interaction.user.get_role(manager_id): return True
         return False
 
-    # BOTÕES CINZAS (SECONDARY)
     @discord.ui.button(label="Vou", style=discord.ButtonStyle.secondary, custom_id="rsvp_yes", emoji="✅")
     async def btn_yes(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_click(interaction, 'confirmed')
 
@@ -199,14 +211,11 @@ class PersistentRsvpView(discord.ui.View):
         if not await self.check_manager_permission(interaction, event):
             return await interaction.response.send_message("❌ Apenas o Criador ou Gerentes podem apagar.", ephemeral=True)
 
-        # 1. Notificar
         await notify_confirmed_users(interaction, event_id, f"⚠️ **Aviso:** O evento **{event['title']}** foi CANCELADO por {interaction.user.display_name}.")
-
-        # 2. Resposta imediata
+        
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send("✅ Iniciando exclusão...", ephemeral=True)
 
-        # 3. Deletar
         guild = interaction.guild
         if guild:
             try:
