@@ -54,15 +54,27 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
         official_name, act_type, slots = utils.detect_activity_details(new_title)
         if slots is None: slots = self.event_data['max_slots'] or 6
         
+        # Verifica se a data mudou para enviar notificação específica
+        old_date_str = self.date_input.default
+        new_date_str = new_dt.strftime("%d/%m %H:%M")
+        
+        # Mensagem padrão
+        msg_notification = f"📝 **Evento Editado:** O evento **{official_name}** foi alterado por {interaction.user.display_name}."
+        
+        # Se a data mudou, muda a mensagem e avisa no canal
+        date_changed = old_date_str != new_date_str
+        if date_changed:
+             msg_notification = f"📅 **DATA ALTERADA:** O evento **{official_name}** foi remarcado para **{new_dt.strftime('%d/%m às %H:%M')}** por {interaction.user.display_name}. Verifique sua disponibilidade!"
+
         # Atualizar DB
         await db.update_event_details(
             self.event_data['event_id'], official_name, self.desc_input.value, new_dt, act_type, slots
         )
         
-        # Notificar
-        await notify_confirmed_users(interaction, self.event_data['event_id'], f"📝 **Evento Editado:** O evento **{official_name}** foi alterado por {interaction.user.display_name}.")
+        # Notificar via DM
+        await notify_confirmed_users(interaction, self.event_data['event_id'], msg_notification)
         
-        # Atualizar Visual
+        # Atualizar Visual (Embed)
         event = await db.get_event(self.event_data['event_id'])
         rsvps = await db.get_rsvps(self.event_data['event_id'])
         
@@ -73,15 +85,14 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
                 msg = await channel.fetch_message(event['message_id'])
                 await msg.edit(embed=embed)
                 
-                # Renomear canal
-                confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
-                free_slots = max(0, slots - confirmed_count)
-                new_name = utils.generate_channel_name(official_name, new_dt, act_type, free_slots, description=self.desc_input.value)
-                if channel.name != new_name: await channel.edit(name=new_name)
+                # Avisar no chat do evento se a data mudou
+                if date_changed:
+                    await channel.send(f"📢 {interaction.user.mention} alterou a data deste evento para **{new_dt.strftime('%d/%m às %H:%M')}**!")
                     
-                await interaction.followup.send("✅ Evento atualizado!", ephemeral=True)
+                await interaction.followup.send("✅ Evento atualizado! (O nome do canal será atualizado em breve)", ephemeral=True)
             except Exception as e:
-                await interaction.followup.send(f"Salvo, mas erro visual: {e}", ephemeral=True)
+                print(f"Erro visual ao editar evento: {e}")
+                await interaction.followup.send(f"Salvo, mas houve um erro visual: {e}", ephemeral=True)
 
 # --- VIEW PRINCIPAL ---
 class PersistentRsvpView(discord.ui.View):
@@ -109,19 +120,8 @@ class PersistentRsvpView(discord.ui.View):
         embed = await utils.build_event_embed(dict(event), rsvps, interaction.client)
         await interaction.message.edit(embed=embed)
         
-        confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
-        free_slots = max(0, slots - confirmed_count)
-        
-        if isinstance(event['date_time'], str):
-            try: event_dt = datetime.datetime.fromisoformat(event['date_time'])
-            except: event_dt = datetime.datetime.now()
-        else: event_dt = event['date_time']
-        if event_dt.tzinfo is None: event_dt = BR_TIMEZONE.localize(event_dt)
-
-        new_name = utils.generate_channel_name(event['title'], event_dt, event['activity_type'], free_slots, description=event['description'])
-        if interaction.channel.name != new_name:
-            try: await interaction.channel.edit(name=new_name)
-            except: pass
+        # REMOVIDO: A atualização do nome do canal agora é feita apenas pelo cogs/tasks.py
+        # para evitar Rate Limit do Discord.
 
     async def handle_click(self, interaction: discord.Interaction, status: str):
         try:
