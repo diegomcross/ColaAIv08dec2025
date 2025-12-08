@@ -75,7 +75,11 @@ class SlotsView(discord.ui.View):
         await interaction.followup.send(f"✅ Evento criado em {channel.mention} ({slots} vagas)!", ephemeral=True)
         
         self.stop()
-        await self.modal_interaction.edit_original_response(content="✅ Vagas definidas.", view=None)
+        # Proteção contra erro Unknown Message se a interação original expirou
+        try:
+            await self.modal_interaction.edit_original_response(content="✅ Vagas definidas.", view=None)
+        except:
+            pass
 
     @discord.ui.button(label="2", style=discord.ButtonStyle.primary)
     async def slot_2(self, interaction: discord.Interaction, button: discord.ui.Button): await self.finalize_creation(interaction, 2)
