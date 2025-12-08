@@ -167,11 +167,32 @@ async def create_poll(message_id, channel_id, guild_id, poll_type, target_data):
         """, (message_id, channel_id, guild_id, poll_type, target_data))
         await db.commit()
 
+async def get_active_polls():
+    """Retorna enquetes abertas."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM polls WHERE status = 'open'") as cursor:
+            return await cursor.fetchall()
+
 async def get_poll_details(message_id):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM polls WHERE message_id = ?", (message_id,)) as cursor:
             return await cursor.fetchone()
+
+# NOVO: Verifica voto atual do usuário para permitir toggle
+async def get_user_vote(message_id, user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT vote_option FROM poll_votes WHERE poll_message_id = ? AND user_id = ?", (message_id, user_id)) as cursor:
+            row = await cursor.fetchone()
+            return row['vote_option'] if row else None
+
+# NOVO: Deleta voto (para toggle)
+async def remove_poll_vote(message_id, user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM poll_votes WHERE poll_message_id = ? AND user_id = ?", (message_id, user_id))
+        await db.commit()
 
 async def add_poll_vote(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -182,6 +203,7 @@ async def add_poll_vote(message_id, user_id, option):
 async def get_poll_votes(message_id):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
+        # Pega contagem
         async with db.execute("""
             SELECT vote_option, COUNT(*) as count 
             FROM poll_votes 
@@ -189,6 +211,19 @@ async def get_poll_votes(message_id):
             GROUP BY vote_option
         """, (message_id,)) as cursor:
             return await cursor.fetchall()
+
+# NOVO: Pega IDs dos votantes para mostrar nomes
+async def get_poll_voters_detailed(message_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT user_id, vote_option FROM poll_votes WHERE poll_message_id = ?", (message_id,)) as cursor:
+            return await cursor.fetchall()
+
+async def get_voters_for_option(message_id, option):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT user_id FROM poll_votes WHERE poll_message_id = ? AND vote_option = ?", (message_id, option)) as cursor:
+            return [r['user_id'] for r in await cursor.fetchall()]
 
 async def close_poll(message_id):
     async with aiosqlite.connect(DB_NAME) as db:
