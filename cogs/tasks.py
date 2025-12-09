@@ -22,19 +22,19 @@ class TasksCog(commands.Cog):
 
     @tasks.loop(minutes=15)
     async def polls_management_loop(self):
-        """Gerencia enquetes: expira após 24h, notifica a cada 6h, renomeia canal."""
+        """Gerencia enquetes: expira após 24h, notifica a cada 8h, renomeia canal."""
         active_polls = await db.get_active_polls()
         now = datetime.datetime.now(BR_TIMEZONE)
         
         has_new_polls = False
         
+        # Lista para manter polls que ainda estão válidas para contagem
+        valid_polls_count = 0
+
         for poll in active_polls:
             created_at_str = poll['created_at']
-            # created_at no SQLite é string UTC por padrão, converter
             try:
-                # Tenta parsear
                 created_at = datetime.datetime.fromisoformat(created_at_str)
-                # Se não tiver timezone, assume UTC e converte para BR
                 if created_at.tzinfo is None:
                     created_at = created_at.replace(tzinfo=datetime.timezone.utc).astimezone(BR_TIMEZONE)
             except:
@@ -47,22 +47,24 @@ class TasksCog(commands.Cog):
                 await db.close_poll(poll['message_id'])
                 try:
                     channel = self.bot.get_channel(poll['channel_id'])
-                    msg = await channel.fetch_message(poll['message_id'])
-                    await msg.edit(view=None)
-                    await channel.send(f"🔒 Enquete encerrada (expirou após 24h).")
+                    if channel:
+                        msg = await channel.fetch_message(poll['message_id'])
+                        await msg.delete() # Apaga a mensagem se expirou (opcional, ou pode editar para "Encerrada")
+                        # Se preferir manter a mensagem avisando que expirou, use:
+                        # await msg.edit(view=None, content="🔒 Esta enquete expirou após 24h sem atingir a meta.")
                 except: pass
                 continue
             else:
+                valid_polls_count += 1
                 has_new_polls = True
 
-            # 2. Notificação a cada 6h (aprox)
-            # Verifica se horas passadas é múltiplo de 6 e minutos < 15
+            # 2. Notificação a cada 8h
             hours_passed = int(diff.total_seconds() / 3600)
-            if hours_passed > 0 and hours_passed % 6 == 0 and diff.total_seconds() % 3600 < 900:
+            # Verifica se passou pelo menos 1 hora, se é múltiplo de 8, e se estamos no "começo" dessa hora (para não spammar)
+            if hours_passed > 0 and hours_passed % 8 == 0 and diff.total_seconds() % 3600 < 900:
                 main_chat = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
                 poll_channel = self.bot.get_channel(poll['channel_id'])
                 if main_chat and poll_channel:
-                    # Tenta ler o tipo da enquete pra ser específico
                     txt = "Há enquetes em aberto esperando seu voto!"
                     if poll['poll_type'] == 'when':
                         txt = f"Ainda estamos decidindo o horário para **{poll['target_data']}**!"
@@ -72,12 +74,18 @@ class TasksCog(commands.Cog):
         try:
             poll_channel = self.bot.get_channel(config.CHANNEL_POLLS)
             if poll_channel:
-                base_name = "enquetes"
-                new_name = f"{base_name}-novas-🟢" if has_new_polls else f"{base_name}-fechadas-🔴"
+                # Lógica solicitada:
+                # Sem enquetes vigentes -> 📢crie uma enquete
+                # Com enquetes vigentes -> responda a enquete‼️
+                if valid_polls_count > 0:
+                    new_name = "responda-a-enquete‼️"
+                else:
+                    new_name = "📢crie-uma-enquete"
+                
+                # Só edita se o nome for diferente para evitar API spam
                 if poll_channel.name != new_name:
                     await poll_channel.edit(name=new_name)
         except Exception as e:
-            # Ignora erros de rate limit
             pass
 
     @tasks.loop(minutes=5)
