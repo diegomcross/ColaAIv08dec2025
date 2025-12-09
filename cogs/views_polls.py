@@ -19,20 +19,22 @@ class PollView(discord.ui.View):
         user_id = interaction.user.id
         message_id = interaction.message.id
         
-        # 1. Lógica de Toggle (Votar/Remover)
-        current_vote = await db.get_user_vote(message_id, user_id)
+        # 1. Lógica de Toggle (Votos Múltiplos)
+        # Verifica se já votou NESTA opção
+        has_voted = await db.check_user_vote_on_option(message_id, user_id, option)
         
-        if current_vote == option:
-            # Clicou no mesmo botão -> Remove voto
-            await db.remove_poll_vote(message_id, user_id)
+        if has_voted:
+            # Se já votou nessa, remove (toggle off)
+            await db.remove_poll_vote_option(message_id, user_id, option)
         else:
-            # Novo voto ou troca de voto -> Atualiza
+            # Se não votou nessa, adiciona (toggle on)
+            # Como a tabela aceita (msg_id, user_id, option), o usuário pode ter várias linhas
             await db.add_poll_vote(message_id, user_id, option)
         
-        # 2. Reconstruir Embed com nomes
+        # 2. Reconstruir Embed
         votes = await db.get_poll_voters_detailed(message_id)
         
-        # Agrupar votos: { 'Opção A': [uid1, uid2], 'Opção B': [uid3] }
+        # Agrupa votos: { 'Opção A': [id1, id2], 'Opção B': [id3] }
         vote_map = {}
         for row in votes:
             opt = row['vote_option']
@@ -45,14 +47,18 @@ class PollView(discord.ui.View):
         winner_option = None
         base_desc = f"Meta para confirmar: **{self.threshold} votos**\n\n"
         
-        # Ordenar por quantidade de votos
+        # Ordena opções por contagem
         sorted_options = sorted(vote_map.items(), key=lambda x: len(x[1]), reverse=True)
         
+        # Lista todas as opções votadas
         for opt, user_ids in sorted_options:
             count = len(user_ids)
-            if count >= self.threshold: winner_option = opt
+            # Lógica de vitória: Primeira opção que bater a meta vence
+            # (Poderíamos esperar mais, mas o requisito é confirmar ao atingir)
+            if count >= self.threshold and not winner_option: 
+                winner_option = opt
             
-            # Formatar nomes dos votantes
+            # Nomes
             voter_names = []
             guild = interaction.guild
             for uid in user_ids:
@@ -65,8 +71,10 @@ class PollView(discord.ui.View):
             if count >= self.threshold: line += " ✅"
             new_desc_lines.append(line)
             
-        # Se alguma opção não teve votos ainda mas estava na lista original, não aparece aqui
-        # (Isso é aceitável ou poderíamos passar a lista original de opções para exibir com 0 votos)
+        # Adicionar opções que ainda não têm votos? (Opcional, mas ajuda a ver o que tem)
+        # Para simplificar e manter limpo, mostramos apenas as que têm votos OU
+        # se preferir, podemos manter as linhas originais. 
+        # A abordagem atual mostra apenas quem recebeu voto, limpando o chat.
             
         embed.description = base_desc + "\n".join(new_desc_lines)
         await interaction.message.edit(embed=embed)
@@ -113,21 +121,19 @@ class PollView(discord.ui.View):
         embed_loading = discord.Embed(title="Gerando evento...", color=discord.Color.gold())
         msg = await channel.send(content=f"{role.mention} A comunidade decidiu!", embed=embed_loading, view=PersistentRsvpView())
 
-        # CORREÇÃO: Usar key 'date_time' para bater com utils.py
-        db_data = {
-            'guild_id': guild.id, 'channel_id': channel.id, 'message_id': msg.id,
-            'role_id': role.id, 'title': official_name, 'description': "Criado via Enquete",
-            'activity_type': act_type, 'date_time': final_dt, 'max_slots': slots, 'creator_id': self.bot.user.id
-        }
-        
-        # Para criar no DB usamos chaves simplificadas que create_event espera
+        # Dados DB
         create_data = {
             'guild_id': guild.id, 'channel_id': channel.id, 'message_id': msg.id,
             'role_id': role.id, 'title': official_name, 'desc': "Criado via Enquete",
             'type': act_type, 'date': final_dt, 'slots': slots, 'creator': self.bot.user.id
         }
         event_id = await db.create_event(create_data)
+        
+        # Dados para Utils
+        db_data = create_data.copy()
         db_data['event_id'] = event_id
+        db_data['date_time'] = final_dt # Ajuste de chave
+        db_data['max_slots'] = slots # Ajuste de chave
         
         # 4. Confirmar TODOS os votantes da opção vencedora
         winning_voters = await db.get_voters_for_option(interaction.message.id, winner_value)
@@ -146,13 +152,14 @@ class PollView(discord.ui.View):
         for child in self.children: child.disabled = True
         await interaction.message.edit(view=self)
 
-# --- VIEW DE VOTAÇÃO ---
 class VotingPollView(PollView):
     def __init__(self, bot, poll_type, target_data, options_list):
         super().__init__(bot, poll_type, target_data)
         for opt in options_list:
             label = opt.get('label', opt.get('value'))
             value = opt.get('value', label)
+            # Botão secundário (cinza) permite clicar, ficar azul seria visualmente legal mas
+            # requer persistência de estado complexa na View. O padrão cinza com texto no embed funciona bem.
             self.add_item(VotingButton(label, value))
 
 class VotingButton(discord.ui.Button):
@@ -162,7 +169,6 @@ class VotingButton(discord.ui.Button):
     async def callback(self, interaction):
         await self.view.handle_vote(interaction, self.value)
 
-# --- VIEW DO BUILDER (Filtro de Horário < 20h) ---
 class PollBuilderView(discord.ui.View):
     def __init__(self, bot, activity_name):
         super().__init__(timeout=180)
@@ -192,7 +198,7 @@ class PollBuilderView(discord.ui.View):
         
         # Filtro: Horários apenas até as 20h
         raw_times = ["08:00", "11:00", "14:00", "17:00", "20:00", "22:00"]
-        valid_times = [t for t in raw_times if int(t.split(':')[0]) <= 20]
+        valid_times = [t for t in raw_times if int(t.split(':')[0]) <= 20] # Apenas <= 20h
         
         options_list = []
         for t in valid_times:
@@ -203,24 +209,24 @@ class PollBuilderView(discord.ui.View):
         
         embed = discord.Embed(
             title=f"📊 Enquete de Horário: {self.activity_name}",
-            description=f"**Dia:** {self.selected_day}\n\nMeta para confirmar: **3 votos** no mesmo horário.",
+            description=f"**Dia:** {self.selected_day}\n\nMeta para confirmar: **3 votos** no mesmo horário.\n*Você pode votar em mais de um horário!*",
             color=discord.Color.blue()
         )
         embed.set_footer(text="Vote clicando nos botões abaixo. (Clique novamente para remover)")
         
         try:
-            poll_channel = interaction.guild.get_channel(config.CHANNEL_POLLS)
-            if not poll_channel: poll_channel = interaction.channel
+            # Posta no mesmo canal onde foi solicitado (que já foi validado)
+            poll_channel = interaction.channel
             
             msg = await poll_channel.send(embed=embed, view=poll_view)
             await db.create_poll(msg.id, poll_channel.id, interaction.guild.id, 'when', self.activity_name)
             
-            # Notificação no Chat Principal
+            # Notificação no Chat Principal se não for lá
             main_chat = interaction.guild.get_channel(config.CHANNEL_MAIN_CHAT)
-            if main_chat:
-                await main_chat.send(f"📢 **Nova Enquete Disponível!**\nVamos jogar **{self.activity_name}**? Vote no horário aqui: {poll_channel.mention}")
+            if main_chat and interaction.channel_id != config.CHANNEL_MAIN_CHAT:
+                await main_chat.send(f"📢 **Nova Enquete Disponível!**\nVamos jogar **{self.activity_name}**? Vote no horário aqui: {msg.jump_url}")
 
-            await interaction.followup.send(f"✅ Enquete lançada em {poll_channel.mention}!", ephemeral=True)
+            await interaction.followup.send(f"✅ Enquete lançada!", ephemeral=True)
             self.stop()
         except Exception as e:
             await interaction.followup.send(f"Erro ao criar enquete: {e}", ephemeral=True)
