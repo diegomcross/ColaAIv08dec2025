@@ -150,6 +150,8 @@ async def log_voice_session(user_id, start, end, duration):
 async def get_voice_hours(days_back):
     limit_date = datetime.datetime.now() - datetime.timedelta(days=days_back)
     async with aiosqlite.connect(DB_NAME) as db:
+        # --- CORREÇÃO AQUI: Adicionado row_factory ---
+        db.row_factory = aiosqlite.Row 
         async with db.execute("""
             SELECT user_id, SUM(duration_minutes) as total_mins 
             FROM voice_sessions 
@@ -179,23 +181,22 @@ async def get_poll_details(message_id):
         async with db.execute("SELECT * FROM polls WHERE message_id = ?", (message_id,)) as cursor:
             return await cursor.fetchone()
 
-# NOVO: Verifica se o usuário JÁ votou nesta opção específica (para permitir remover)
+# Verifica voto atual do usuário para permitir toggle
 async def check_user_vote_on_option(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT 1 FROM poll_votes_v2 WHERE poll_message_id = ? AND user_id = ? AND vote_option = ?", (message_id, user_id, option)) as cursor:
             return await cursor.fetchone() is not None
 
-# NOVO: Remove um voto específico
+# Remove um voto específico
 async def remove_poll_vote_option(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM poll_votes_v2 WHERE poll_message_id = ? AND user_id = ? AND vote_option = ?", (message_id, user_id, option))
         await db.commit()
 
-# NOVO: Adiciona voto (sem substituir os outros do mesmo usuário)
+# Adiciona voto
 async def add_poll_vote(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
-        # Usa poll_votes_v2 agora
         await db.execute("INSERT OR IGNORE INTO poll_votes_v2 (poll_message_id, user_id, vote_option) VALUES (?, ?, ?)", 
                          (message_id, user_id, option))
         await db.commit()
@@ -221,7 +222,6 @@ async def get_voters_for_option(message_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT user_id FROM poll_votes_v2 WHERE poll_message_id = ? AND vote_option = ?", (message_id, option)) as cursor:
-            # Retorna lista única de IDs (set) caso haja duplicidade por erro
             return list(set([r['user_id'] for r in await cursor.fetchall()]))
 
 async def close_poll(message_id):
