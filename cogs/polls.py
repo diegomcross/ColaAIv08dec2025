@@ -12,20 +12,19 @@ class PollsCog(commands.Cog):
         self.bot = bot
 
     def is_allowed_channel(self, interaction: discord.Interaction) -> bool:
-        # Permite no Main Chat OU no LFG (Procure Atividades)
-        return interaction.channel_id in [config.CHANNEL_MAIN_CHAT, config.CHANNEL_LFG]
+        # Permite nos 3 canais
+        return interaction.channel_id in [config.CHANNEL_MAIN_CHAT, config.CHANNEL_LFG, config.CHANNEL_POLLS]
 
     @app_commands.command(name="enquete_quando", description="Votação de horários para uma atividade.")
     @app_commands.describe(atividade="Nome da atividade (ex: Voto, Crota)")
     async def poll_when(self, interaction: discord.Interaction, atividade: str):
         if not self.is_allowed_channel(interaction):
             return await interaction.response.send_message(
-                f"⚠️ Use este comando em <#{config.CHANNEL_MAIN_CHAT}> ou <#{config.CHANNEL_LFG}>!", 
+                f"⚠️ Use: <#{config.CHANNEL_MAIN_CHAT}>, <#{config.CHANNEL_LFG}> ou <#{config.CHANNEL_POLLS}>.", 
                 ephemeral=True
             )
 
         pretty_name = utils.format_activity_name(atividade)
-        
         view = PollBuilderView(self.bot, pretty_name)
         await interaction.response.send_message(
             f"🛠️ **Configurando enquete para: {pretty_name}**\nSelecione o dia e clique em 'Lançar Enquete'.", 
@@ -47,21 +46,18 @@ class PollsCog(commands.Cog):
         
         if not self.is_allowed_channel(interaction):
             return await interaction.response.send_message(
-                f"⚠️ Use este comando em <#{config.CHANNEL_MAIN_CHAT}> ou <#{config.CHANNEL_LFG}>!", 
+                f"⚠️ Use: <#{config.CHANNEL_MAIN_CHAT}>, <#{config.CHANNEL_LFG}> ou <#{config.CHANNEL_POLLS}>.", 
                 ephemeral=True
             )
 
-        # Coletar todas as opções preenchidas
         raw_options = [opcao1, opcao2, opcao3, opcao4, opcao5, opcao6]
-        valid_options = [opt for opt in raw_options if opt] # Remove None/Vazio
+        valid_options = [opt for opt in raw_options if opt]
 
-        # Formatar nomes
         options_list = []
         desc_lines = []
         for i, opt in enumerate(valid_options):
             fmt_name = utils.format_activity_name(opt)
             options_list.append({'label': fmt_name, 'value': fmt_name})
-            # Emojis numéricos para o Embed (1️⃣, 2️⃣...)
             emoji_num = f"{i+1}\ufe0f\u20e3"
             desc_lines.append(f"{emoji_num} {fmt_name}")
 
@@ -79,9 +75,9 @@ class PollsCog(commands.Cog):
         view = VotingPollView(self.bot, 'what', target_data, options_list)
         msg = await interaction.channel.send(embed=embed, view=view)
         
-        # Notificação no chat principal (se não foi criado lá)
+        # Notificação no Chat Principal (apenas se não foi criado lá ou no canal de enquetes)
         main_chat = interaction.guild.get_channel(config.CHANNEL_MAIN_CHAT)
-        if main_chat and interaction.channel_id != config.CHANNEL_MAIN_CHAT:
+        if main_chat and interaction.channel_id not in [config.CHANNEL_MAIN_CHAT, config.CHANNEL_POLLS]:
             await main_chat.send(f"📢 **Duelo de Atividades!**\nEscolha o que jogar em {quando}: {msg.jump_url}")
 
         await interaction.response.send_message("Enquete criada!", ephemeral=True)
