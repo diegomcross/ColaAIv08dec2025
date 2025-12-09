@@ -20,21 +20,16 @@ class PollView(discord.ui.View):
         message_id = interaction.message.id
         
         # 1. Lógica de Toggle (Votos Múltiplos)
-        # Verifica se já votou NESTA opção
         has_voted = await db.check_user_vote_on_option(message_id, user_id, option)
         
         if has_voted:
-            # Se já votou nessa, remove (toggle off)
             await db.remove_poll_vote_option(message_id, user_id, option)
         else:
-            # Se não votou nessa, adiciona (toggle on)
-            # Como a tabela aceita (msg_id, user_id, option), o usuário pode ter várias linhas
             await db.add_poll_vote(message_id, user_id, option)
         
         # 2. Reconstruir Embed
         votes = await db.get_poll_voters_detailed(message_id)
         
-        # Agrupa votos: { 'Opção A': [id1, id2], 'Opção B': [id3] }
         vote_map = {}
         for row in votes:
             opt = row['vote_option']
@@ -47,18 +42,13 @@ class PollView(discord.ui.View):
         winner_option = None
         base_desc = f"Meta para confirmar: **{self.threshold} votos**\n\n"
         
-        # Ordena opções por contagem
         sorted_options = sorted(vote_map.items(), key=lambda x: len(x[1]), reverse=True)
         
-        # Lista todas as opções votadas
         for opt, user_ids in sorted_options:
             count = len(user_ids)
-            # Lógica de vitória: Primeira opção que bater a meta vence
-            # (Poderíamos esperar mais, mas o requisito é confirmar ao atingir)
             if count >= self.threshold and not winner_option: 
                 winner_option = opt
             
-            # Nomes
             voter_names = []
             guild = interaction.guild
             for uid in user_ids:
@@ -70,11 +60,6 @@ class PollView(discord.ui.View):
             line = f"**{opt}** ({count}): {names_str}"
             if count >= self.threshold: line += " ✅"
             new_desc_lines.append(line)
-            
-        # Adicionar opções que ainda não têm votos? (Opcional, mas ajuda a ver o que tem)
-        # Para simplificar e manter limpo, mostramos apenas as que têm votos OU
-        # se preferir, podemos manter as linhas originais. 
-        # A abordagem atual mostra apenas quem recebeu voto, limpando o chat.
             
         embed.description = base_desc + "\n".join(new_desc_lines)
         await interaction.message.edit(embed=embed)
@@ -121,7 +106,6 @@ class PollView(discord.ui.View):
         embed_loading = discord.Embed(title="Gerando evento...", color=discord.Color.gold())
         msg = await channel.send(content=f"{role.mention} A comunidade decidiu!", embed=embed_loading, view=PersistentRsvpView())
 
-        # Dados DB
         create_data = {
             'guild_id': guild.id, 'channel_id': channel.id, 'message_id': msg.id,
             'role_id': role.id, 'title': official_name, 'desc': "Criado via Enquete",
@@ -129,13 +113,11 @@ class PollView(discord.ui.View):
         }
         event_id = await db.create_event(create_data)
         
-        # Dados para Utils
         db_data = create_data.copy()
         db_data['event_id'] = event_id
-        db_data['date_time'] = final_dt # Ajuste de chave
-        db_data['max_slots'] = slots # Ajuste de chave
+        db_data['date_time'] = final_dt
+        db_data['max_slots'] = slots
         
-        # 4. Confirmar TODOS os votantes da opção vencedora
         winning_voters = await db.get_voters_for_option(interaction.message.id, winner_value)
         for uid in winning_voters:
             await db.update_rsvp(event_id, uid, 'confirmed')
@@ -149,8 +131,12 @@ class PollView(discord.ui.View):
         await msg.edit(embed=final_embed)
         
         await interaction.channel.send(f"🎉 Evento criado em {channel.mention} com {len(winning_voters)} confirmados!")
-        for child in self.children: child.disabled = True
-        await interaction.message.edit(view=self)
+        
+        # --- APAGAR ENQUETE CONCLUÍDA ---
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
 class VotingPollView(PollView):
     def __init__(self, bot, poll_type, target_data, options_list):
@@ -158,8 +144,6 @@ class VotingPollView(PollView):
         for opt in options_list:
             label = opt.get('label', opt.get('value'))
             value = opt.get('value', label)
-            # Botão secundário (cinza) permite clicar, ficar azul seria visualmente legal mas
-            # requer persistência de estado complexa na View. O padrão cinza com texto no embed funciona bem.
             self.add_item(VotingButton(label, value))
 
 class VotingButton(discord.ui.Button):
@@ -196,9 +180,8 @@ class PollBuilderView(discord.ui.View):
         if not self.selected_day:
             return await interaction.response.send_message("⚠️ Selecione um dia primeiro!", ephemeral=True)
         
-        # Filtro: Horários apenas até as 20h
         raw_times = ["08:00", "11:00", "14:00", "17:00", "20:00", "22:00"]
-        valid_times = [t for t in raw_times if int(t.split(':')[0]) <= 20] # Apenas <= 20h
+        valid_times = [t for t in raw_times if int(t.split(':')[0]) <= 20]
         
         options_list = []
         for t in valid_times:
@@ -215,13 +198,10 @@ class PollBuilderView(discord.ui.View):
         embed.set_footer(text="Vote clicando nos botões abaixo. (Clique novamente para remover)")
         
         try:
-            # Posta no mesmo canal onde foi solicitado (que já foi validado)
             poll_channel = interaction.channel
-            
             msg = await poll_channel.send(embed=embed, view=poll_view)
             await db.create_poll(msg.id, poll_channel.id, interaction.guild.id, 'when', self.activity_name)
             
-            # Notificação no Chat Principal se não for lá
             main_chat = interaction.guild.get_channel(config.CHANNEL_MAIN_CHAT)
             if main_chat and interaction.channel_id != config.CHANNEL_MAIN_CHAT:
                 await main_chat.send(f"📢 **Nova Enquete Disponível!**\nVamos jogar **{self.activity_name}**? Vote no horário aqui: {msg.jump_url}")
