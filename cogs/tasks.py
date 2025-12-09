@@ -13,22 +13,120 @@ class TasksCog(commands.Cog):
         self.reminders_loop.start()
         self.channel_rename_loop.start()
         self.polls_management_loop.start()
+        self.info_board_loop.start()
 
     def cog_unload(self):
         self.cleanup_loop.cancel()
         self.reminders_loop.cancel()
         self.channel_rename_loop.cancel()
         self.polls_management_loop.cancel()
+        self.info_board_loop.cancel()
+
+    # --- GERENCIADOR DE MENSAGENS PERSISTENTES (SEM APAGAR) ---
+    @tasks.loop(minutes=5)
+    async def info_board_loop(self):
+        await self.bot.wait_until_ready()
+        
+        # 1. CANAL "AGENDE UMA GRADE" (Lista de Eventos)
+        try:
+            sched_channel = self.bot.get_channel(config.CHANNEL_SCHEDULE)
+            if sched_channel:
+                # Procura mensagens anteriores do bot para editar em vez de apagar
+                instr_msg = None
+                list_msg = None
+                
+                async for msg in sched_channel.history(limit=20):
+                    if msg.author == self.bot.user:
+                        if msg.embeds and msg.embeds[0].title == "📅 Agendamento de Grades":
+                            instr_msg = msg
+                        elif msg.embeds and msg.embeds[0].title == "📋 Próximas Atividades":
+                            list_msg = msg
+
+                # A. Garante que a Instrução existe
+                embed_instr = discord.Embed(
+                    title="📅 Agendamento de Grades",
+                    description="Veja abaixo os eventos já marcados.\n\n**Quer criar o seu?**\nUse o comando `/agendar` no bate-papo!",
+                    color=discord.Color.green()
+                )
+                if not instr_msg:
+                    await sched_channel.send(embed=embed_instr)
+                
+                # B. Garante que a Lista existe e está atualizada
+                events = await db.get_active_events()
+                valid_events = []
+                for evt in events:
+                    try:
+                        if isinstance(evt['date_time'], str): dt = datetime.datetime.fromisoformat(evt['date_time'])
+                        else: dt = evt['date_time']
+                        if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
+                        
+                        rsvps = await db.get_rsvps(evt['event_id'])
+                        confirmed = len([r for r in rsvps if r['status'] == 'confirmed'])
+                        
+                        valid_events.append({
+                            'dt': dt, 'title': evt['title'], 'slots': evt['max_slots'],
+                            'confirmed': confirmed, 'channel_id': evt['channel_id']
+                        })
+                    except: continue
+                
+                valid_events.sort(key=lambda x: x['dt'])
+
+                if not valid_events:
+                    desc_list = "*Nenhum evento agendado no momento.*"
+                else:
+                    lines = []
+                    for e in valid_events:
+                        ts = int(e['dt'].timestamp())
+                        free = max(0, e['slots'] - e['confirmed'])
+                        status_emoji = "🟢" if free > 0 else "🔴"
+                        chan_link = f"<#{e['channel_id']}>" if e['channel_id'] else "Canal deletado"
+                        lines.append(f"{status_emoji} **<t:{ts}:d> <t:{ts}:t>** | {chan_link}\n└ **{e['title']}** ({free} vagas)")
+                    desc_list = "\n\n".join(lines)
+
+                embed_list = discord.Embed(title="📋 Próximas Atividades", description=desc_list, color=discord.Color.blue())
+                embed_list.set_footer(text=f"Atualizado em {datetime.datetime.now(BR_TIMEZONE).strftime('%H:%M')}")
+                
+                if list_msg:
+                    await list_msg.edit(embed=embed_list)
+                else:
+                    await sched_channel.send(embed=embed_list)
+
+        except Exception as e:
+            print(f"[DEBUG] Erro no quadro de horários: {e}")
+
+        # 2. CANAL "ENQUETES" (Apenas garante que a instrução existe)
+        try:
+            poll_channel = self.bot.get_channel(config.CHANNEL_POLLS)
+            if poll_channel:
+                content_msg = (
+                    "# @ColaAI 🤖  Utilize os comandos:\n\n"
+                    "## ➡️ Envie  `/enquete_atividade` no chat\n"
+                    "> Para perguntar __qual atividade__ eles querem fazer no dia 'X'. \n"
+                    "> **Por exemplo:** Sábado às 2pm: Crota ou Jardim?\n\n"
+                    "## ➡️ Envie  `/enquete_quando` no chat\n"
+                    "> Para perguntar que __dia ou hora__ eles podem fazer tal atividade.\n"
+                    "> **Por exemplo:** *Deserto Perpétuo (Escola) - Sexta, Sábado ou Domingo?*"
+                )
+
+                # Verifica se a mensagem já existe nas últimas 50 mensagens
+                has_instr = False
+                async for msg in poll_channel.history(limit=50):
+                    if msg.author == self.bot.user and "Utilize os comandos" in msg.content:
+                        has_instr = True
+                        break
+                
+                # Se não encontrar, manda uma nova. Se encontrar, NÃO faz nada (não apaga, não reposta)
+                if not has_instr:
+                    await poll_channel.send(content_msg)
+
+        except Exception as e:
+            print(f"[DEBUG] Erro nas instruções de enquete: {e}")
 
     @tasks.loop(minutes=15)
     async def polls_management_loop(self):
-        """Gerencia enquetes: expira após 24h, notifica a cada 8h, renomeia canal."""
         active_polls = await db.get_active_polls()
         now = datetime.datetime.now(BR_TIMEZONE)
-        
         has_new_polls = False
-        
-        # Lista para manter polls que ainda estão válidas para contagem
         valid_polls_count = 0
 
         for poll in active_polls:
@@ -37,56 +135,40 @@ class TasksCog(commands.Cog):
                 created_at = datetime.datetime.fromisoformat(created_at_str)
                 if created_at.tzinfo is None:
                     created_at = created_at.replace(tzinfo=datetime.timezone.utc).astimezone(BR_TIMEZONE)
-            except:
-                continue
+            except: continue
 
             diff = now - created_at
             
-            # 1. Expirar após 24h
             if diff.total_seconds() > 86400: # 24 horas
                 await db.close_poll(poll['message_id'])
                 try:
                     channel = self.bot.get_channel(poll['channel_id'])
                     if channel:
                         msg = await channel.fetch_message(poll['message_id'])
-                        await msg.delete() # Apaga a mensagem se expirou (opcional, ou pode editar para "Encerrada")
-                        # Se preferir manter a mensagem avisando que expirou, use:
-                        # await msg.edit(view=None, content="🔒 Esta enquete expirou após 24h sem atingir a meta.")
+                        await msg.delete()
                 except: pass
                 continue
             else:
                 valid_polls_count += 1
                 has_new_polls = True
 
-            # 2. Notificação a cada 8h
+            # Notificação a cada 8h
             hours_passed = int(diff.total_seconds() / 3600)
-            # Verifica se passou pelo menos 1 hora, se é múltiplo de 8, e se estamos no "começo" dessa hora (para não spammar)
             if hours_passed > 0 and hours_passed % 8 == 0 and diff.total_seconds() % 3600 < 900:
                 main_chat = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
                 poll_channel = self.bot.get_channel(poll['channel_id'])
                 if main_chat and poll_channel:
                     txt = "Há enquetes em aberto esperando seu voto!"
-                    if poll['poll_type'] == 'when':
-                        txt = f"Ainda estamos decidindo o horário para **{poll['target_data']}**!"
+                    if poll['poll_type'] == 'when': txt = f"Ainda estamos decidindo o horário para **{poll['target_data']}**!"
                     await main_chat.send(f"🔔 {txt} Corre lá: {poll_channel.mention}")
 
-        # 3. Renomear Canal de Enquetes
+        # Renomear Canal de Enquetes
         try:
             poll_channel = self.bot.get_channel(config.CHANNEL_POLLS)
             if poll_channel:
-                # Lógica solicitada:
-                # Sem enquetes vigentes -> 📢crie uma enquete
-                # Com enquetes vigentes -> responda a enquete‼️
-                if valid_polls_count > 0:
-                    new_name = "responda-a-enquete‼️"
-                else:
-                    new_name = "📢crie-uma-enquete"
-                
-                # Só edita se o nome for diferente para evitar API spam
-                if poll_channel.name != new_name:
-                    await poll_channel.edit(name=new_name)
-        except Exception as e:
-            pass
+                new_name = "responda-a-enquete‼️" if valid_polls_count > 0 else "📢crie-uma-enquete"
+                if poll_channel.name != new_name: await poll_channel.edit(name=new_name)
+        except: pass
 
     @tasks.loop(minutes=5)
     async def cleanup_loop(self):
@@ -94,8 +176,7 @@ class TasksCog(commands.Cog):
         now = datetime.datetime.now(BR_TIMEZONE)
         for event in events:
             try:
-                if isinstance(event['date_time'], str):
-                    evt_time = datetime.datetime.fromisoformat(event['date_time'])
+                if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
             except: continue
@@ -132,8 +213,7 @@ class TasksCog(commands.Cog):
                 if not channel: continue
                 rsvps = await db.get_rsvps(event['event_id'])
                 confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
-                if isinstance(event['date_time'], str):
-                    evt_time = datetime.datetime.fromisoformat(event['date_time'])
+                if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
                 free_slots = max(0, event['max_slots'] - confirmed_count)
