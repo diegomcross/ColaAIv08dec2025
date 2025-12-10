@@ -5,6 +5,7 @@ import database as db
 import datetime
 from constants import BR_TIMEZONE, RANK_THRESHOLDS
 import config
+import utils # Importado para limpar os nomes
 
 class RankingCog(commands.Cog):
     def __init__(self, bot):
@@ -28,7 +29,6 @@ class RankingCog(commands.Cog):
                 start_time = self.voice_sessions.pop(member.id)
                 
                 # Regra Anti-Farm: Só conta se tinha mais de 1 pessoa no canal (não estava sozinho)
-                # Nota: before.channel.members ainda inclui a pessoa que saiu neste momento do evento
                 if len(before.channel.members) > 1: 
                     duration = (now - start_time).total_seconds() / 60
                     if duration > 1: # Mínimo 1 minuto
@@ -39,49 +39,55 @@ class RankingCog(commands.Cog):
                 else:
                     print(f"[VOZ] {member.display_name}: Sozinho no canal (Anti-Farm).")
 
-    # --- NOVO COMANDO PRIVADO ---
+    # --- COMANDO PARA VERIFICAR TEMPO ---
     @app_commands.command(name="ver_tempo", description="Admin: Verifica o tempo de voz (Relatório Privado).")
     @app_commands.describe(dias="Quantos dias atrás analisar? (Padrão 7)", usuario="Verificar um usuário específico")
     async def check_voice_time(self, interaction: discord.Interaction, dias: int = 7, usuario: discord.Member = None):
         # Apenas você vê a resposta (ephemeral)
         await interaction.response.defer(ephemeral=True)
         
-        # Busca dados do banco
-        data = await db.get_voice_hours(dias)
-        
-        if not data:
-            return await interaction.followup.send(f"❌ Nenhum registro de voz encontrado nos últimos {dias} dias.", ephemeral=True)
-
-        # Transforma a lista do banco em um dicionário {id: minutos}
-        hours_map = {r['user_id']: r['total_mins'] for r in data}
-
-        if usuario:
-            # Mostra apenas o usuário solicitado
-            mins = hours_map.get(usuario.id, 0)
-            hours = int(mins / 60)
-            minutes = int(mins % 60)
-            await interaction.followup.send(f"⏱️ **Relatório de {usuario.display_name}** ({dias} dias):\nTempo Total: **{hours}h {minutes}m**", ephemeral=True)
-        else:
-            # Mostra um Top 20 Geral
-            sorted_data = sorted(hours_map.items(), key=lambda x: x[1], reverse=True)
+        try:
+            # Busca dados do banco
+            data = await db.get_voice_hours(dias)
             
-            lines = [f"📊 **Relatório de Voz (Últimos {dias} dias)**"]
-            for i, (uid, mins) in enumerate(sorted_data[:20]):
-                member = interaction.guild.get_member(uid)
-                name = member.display_name if member else f"User {uid}"
-                h = int(mins / 60)
-                m = int(mins % 60)
-                lines.append(f"**{i+1}. {name}**: {h}h {m}m")
-            
-            if not sorted_data:
-                lines.append("_Nenhum dado._")
+            if not data:
+                return await interaction.followup.send(f"❌ Nenhum registro de voz encontrado nos últimos {dias} dias.", ephemeral=True)
+
+            # Transforma a lista do banco em um dicionário {id: minutos}
+            hours_map = {r['user_id']: r['total_mins'] for r in data}
+
+            if usuario:
+                # Mostra apenas o usuário solicitado
+                mins = hours_map.get(usuario.id, 0)
+                hours = int(mins / 60)
+                minutes = int(mins % 60)
+                clean_name = utils.clean_voter_name(usuario.display_name)
+                await interaction.followup.send(f"⏱️ **Relatório de {clean_name}** ({dias} dias):\nTempo Total: **{hours}h {minutes}m**", ephemeral=True)
+            else:
+                # Mostra um Top 20 Geral
+                sorted_data = sorted(hours_map.items(), key=lambda x: x[1], reverse=True)
                 
-            await interaction.followup.send("\n".join(lines), ephemeral=True)
+                lines = [f"📊 **Relatório de Voz (Últimos {dias} dias)**"]
+                for i, (uid, mins) in enumerate(sorted_data[:20]):
+                    member = interaction.guild.get_member(uid)
+                    # Usa o nome limpo (ou User ID se saiu do servidor)
+                    name = utils.clean_voter_name(member.display_name) if member else f"User {uid}"
+                    h = int(mins / 60)
+                    m = int(mins % 60)
+                    lines.append(f"**{i+1}. {name}**: {h}h {m}m")
+                
+                if not sorted_data:
+                    lines.append("_Nenhum dado._")
+                    
+                await interaction.followup.send("\n".join(lines), ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Erro ao buscar dados: {e}", ephemeral=True)
 
     @tasks.loop(hours=3)
     async def update_ranking_loop(self):
         """Atualiza Leaderboard e Cargos (Edita mensagem para evitar spam)"""
-        guild = self.bot.get_guild(int(config.GUILD_ID)) if hasattr(config, 'GUILD_ID') else self.bot.guilds[0]
+        # Pega o primeiro servidor que o bot encontrar (já que GUILD_ID não é obrigatório no config)
+        guild = self.bot.guilds[0] if self.bot.guilds else None
         if not guild: return
 
         # Pegar dados (Rolling 7 days para ranking principal)
@@ -111,7 +117,9 @@ class RankingCog(commands.Cog):
             elif h14 >= RANK_THRESHOLDS['ATIVO']: rank = "ATIVO"
             elif h14 >= RANK_THRESHOLDS['TURISTA']: rank = "TURISTA 🟢"
             
-            leaderboard.append({'name': member.display_name, 'h7': h7, 'rank': rank})
+            # Aplica nome limpo
+            clean_name = utils.clean_voter_name(member.display_name)
+            leaderboard.append({'name': clean_name, 'h7': h7, 'rank': rank})
 
         # Ordenar
         leaderboard.sort(key=lambda x: x['h7'], reverse=True)
