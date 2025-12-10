@@ -3,3 +3,5 @@ python-dateutil
 pytz
 dateparser
 aiosqlite
+python-dotenv
+google-generativeai
