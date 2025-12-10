@@ -7,33 +7,28 @@ import database as db
 import utils
 import config
 from constants import BR_TIMEZONE
+import google.generativeai as genai
 
-# --- FRASES DE BOM DIA (ColaAI - Otimista) ---
-MOTIVATIONAL_QUOTES = [
+# --- CONFIGURAÇÃO DA IA ---
+if config.GEMINI_API_KEY:
+    genai.configure(api_key=config.GEMINI_API_KEY)
+    # Configura o modelo (Flash é mais rápido e eficiente para tarefas simples)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    model = None
+    print("[AVISO] GEMINI_API_KEY não encontrada. O bot usará frases fixas.")
+
+# --- LISTAS DE FALLBACK (Caso a IA falhe) ---
+FALLBACK_MOTIVATIONAL = [
     "Bom dia, Guardião! O Testemunha virou fumaça, mas o seu loot continua lá esperando. Vamos farmar!",
     "Acorda! Se um Titã consegue comer uma caixa de giz de cera antes do café e ficar bem, você consegue enfrentar essa manhã.",
-    "O Viajante curou o Coração Pálido, agora trate de curar essa preguiça! O dia está lindo para explodir alguns Desprezíveis.",
-    "Caçadores, parem de usar a esquiva para fugir das responsabilidades! O café está na mesa e o Zavala estaria orgulhoso.",
-    "Arcanos, fechem os livros e abram os olhos! A teoria acabou, a prática de sobreviver ao despertador começa agora.",
-    "Se o Corvo aguentou a culpa de ser o Uldren por tanto tempo, você aguenta levantar cedo hoje. Força!",
-    "Rahool pode te dar um item azul num engrama lendário, mas hoje o dia promete ser Exótico! Não desperdice seu RNG dormindo.",
-    "A Forma Final foi evitada, mas a 'Forma do seu Travesseiro' ainda parece ser o inimigo mais forte? Quebre esse vínculo!",
-    "Levanta! A Vanguarda precisa de você mais do que o Drifter precisa de motes.",
-    "Olhos para cima, Guardião! O sol nasceu e a Treva recuou... pelo menos até a próxima DLC."
+    "O Viajante curou o Coração Pálido, agora trate de curar essa preguiça!",
 ]
 
-# --- FRASES DA JURURU (Blue - A Fantasma Ácida) ---
-JURURU_QUOTES = [
-    "Corta essa baboseira. O Testemunha queria congelar o universo numa forma perfeita, e olhando pro seu DPS de ontem, acho que ele só queria te poupar da vergonha.",
-    "Bom dia? Só se for pro inimigo. Você chama isso de 'Build'? Até um Dreg na ZME com uma pistola enferrujada tem mais sinergia que você.",
-    "Interrompendo esse protocolo de otimismo para avisar: O Mestre Rahool me contou que aquele Exótico que você quer NÃO vai cair hoje. Aceita.",
-    "A Luz te dá imortalidade apenas para que você possa errar o pulo na Raid infinitas vezes. O Viajante comete erros, e você é a prova viva flutuante disso.",
-    "Dizem que 'Guardiões fazem o seu próprio destino'. No seu caso, o destino parece ser invariavelmente 'Morto pelos Arquitetos' por pisar numa pedra torta.",
-    "Se a Lógica da Espada da Colmeia fosse aplicada neste clã, você já teria virado um cristal decorativo na estante da Savathûn há muito tempo.",
-    "Eris Morn passou anos sozinha na escuridão da Lua, e ainda assim ela é uma companhia mais agradável do que você explicando mecânica de Raid.",
-    "Não se preocupe com a Próxima Ameaça. A sua forma atual de jogar já é trágica o suficiente para convencer a Treva a desistir da invasão por pura pena.",
-    "Você farma, farma e farma. Para quê? Para guardar a arma no cofre e continuar usando a mesma de 4 anos atrás. A definição de insanidade é o seu inventário.",
-    "Bip. Bop. O Cayde-6 não morreu heroicamente para você errar a Super desse jeito vergonhoso. Volte para a órbita e reflita."
+FALLBACK_JURURU = [
+    "Corta essa baboseira. O Mestre Rahool me contou que aquele Exótico que você quer NÃO vai cair hoje. Aceita.",
+    "Bom dia? Só se for pro inimigo. Você chama isso de 'Build'? Até um Dreg na ZME tem mais sinergia.",
+    "Bip. Bop. O Cayde-6 não morreu heroicamente para você errar a Super desse jeito vergonhoso.",
 ]
 
 class TasksCog(commands.Cog):
@@ -44,7 +39,7 @@ class TasksCog(commands.Cog):
         self.channel_rename_loop.start()
         self.polls_management_loop.start()
         self.info_board_loop.start()
-        self.daily_morning_loop.start() # Inicia o loop de Bom Dia
+        self.daily_morning_loop.start()
 
     def cog_unload(self):
         self.cleanup_loop.cancel()
@@ -54,11 +49,39 @@ class TasksCog(commands.Cog):
         self.info_board_loop.cancel()
         self.daily_morning_loop.cancel()
 
+    # --- FUNÇÃO AUXILIAR PARA GERAR TEXTO COM IA ---
+    async def generate_ai_message(self, mode="motivacional"):
+        if not model: return None
+        
+        try:
+            if mode == "jururu":
+                prompt = (
+                    "Aja como Jururu (Blue), a fantasma sarcástica, desbocada e ácida do Drifter em Destiny 2. "
+                    "Escreva uma mensagem curta (máx 200 caracteres) interrompendo um protocolo de 'bom dia' fofinho. "
+                    "Seja desmotivacional de forma engraçada: critique o desempenho do jogador (DPS baixo, mira ruim, build feia), "
+                    "cite a futilidade do farm, o RNG injusto ou como o Universo é cruel. "
+                    "Use o tom do Drifter/Gambit se quiser. Termine de forma seca."
+                )
+            else:
+                prompt = (
+                    "Escreva uma mensagem de 'Bom dia' curta (máx 280 caracteres), muito engraçada e motivacional para um clã de Destiny 2. "
+                    "Faça referência à lore atual (Fikrul, Ecos, Revenant, O Testemunha derrotado). "
+                    "Faça piadas com classes (Titãs comendo giz de cera, Caçadores saltitantes, Arcanos lendo livros) ou mecânicas (RNG, Rahool, Eververso). "
+                    "Termine com um tom de 'Vamos à luta, Guardião!'."
+                )
+            
+            # Gera a resposta em thread separada para não travar o bot
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            return response.text.strip()
+        except Exception as e:
+            print(f"[IA ERRO] Falha ao gerar frase: {e}")
+            return None
+
     # --- LOOP DE BOM DIA / HACK DA JURURU ---
     # Roda todos os dias às 08:00 (Horário de Brasília)
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
     async def daily_morning_loop(self):
-        # 1. Delay Aleatório (Entre 0 e 120 minutos) -> Mensagem sai entre 08:00 e 10:00
+        # Delay Aleatório (0 a 2 horas)
         delay_seconds = random.randint(0, 7200) 
         print(f"[Daily] Aguardando {delay_seconds/60:.1f} minutos para mandar o bom dia...")
         await asyncio.sleep(delay_seconds)
@@ -66,23 +89,25 @@ class TasksCog(commands.Cog):
         channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
         if not channel: return
 
-        # 2. Rola o dado: 15% de chance de Hack da Jururu (aprox 1 vez por semana)
-        chance_jururu = 0.15 
-        is_hacked = random.random() < chance_jururu
+        # 15% de chance de Hack da Jururu
+        is_hacked = random.random() < 0.15
 
         if is_hacked:
             # MODO JURURU (Blue)
-            frase = random.choice(JURURU_QUOTES)
+            frase = await self.generate_ai_message(mode="jururu")
+            if not frase: frase = random.choice(FALLBACK_JURURU) # Usa lista fixa se IA falhar
+
             embed = discord.Embed(
                 description=f"🔵 **CONEXÃO INTERROMPIDA...**\n\n*\"Chega dessa baboseira motivacional, ColaAI. Deixa a tia falar a verdade.\"*\n\n💀 **A mensagem real de hoje é:**\n\n> {frase}\n\n*— Ass: Jururu (Blue)*",
-                color=discord.Color.dark_teal() # Uma cor "Blue/Drifter"
+                color=discord.Color.dark_teal()
             )
-            # Sem lembretes de agendar, porque a Jururu não liga pra isso.
             await channel.send(embed=embed)
         
         else:
             # MODO NORMAL (ColaAI)
-            frase = random.choice(MOTIVATIONAL_QUOTES)
+            frase = await self.generate_ai_message(mode="motivacional")
+            if not frase: frase = random.choice(FALLBACK_MOTIVATIONAL) # Usa lista fixa se IA falhar
+
             msg = (
                 f"🌞 **Bom dia, Guardião!**\n\n"
                 f"{frase}\n\n"
@@ -91,7 +116,7 @@ class TasksCog(commands.Cog):
             )
             await channel.send(msg)
 
-    # --- OUTROS LOOPS (JÁ EXISTENTES) ---
+    # --- OUTROS LOOPS (MANTIDOS IGUAIS) ---
     
     @tasks.loop(minutes=5)
     async def info_board_loop(self):
@@ -156,6 +181,8 @@ class TasksCog(commands.Cog):
         active_polls = await db.get_active_polls()
         now = datetime.datetime.now(BR_TIMEZONE)
         valid_polls_count = 0
+        has_new_polls = False
+
         for poll in active_polls:
             try:
                 created_at = datetime.datetime.fromisoformat(poll['created_at'])
@@ -163,7 +190,7 @@ class TasksCog(commands.Cog):
             except: continue
             
             diff = now - created_at
-            if diff.total_seconds() > 86400:
+            if diff.total_seconds() > 86400: # 24h
                 await db.close_poll(poll['message_id'])
                 try:
                     channel = self.bot.get_channel(poll['channel_id'])
@@ -172,9 +199,12 @@ class TasksCog(commands.Cog):
                         await msg.delete()
                 except: pass
                 continue
-            else: valid_polls_count += 1
+            else:
+                valid_polls_count += 1
+                has_new_polls = True
 
             hours_passed = int(diff.total_seconds() / 3600)
+            # Notificação a cada 8h
             if hours_passed > 0 and hours_passed % 8 == 0 and diff.total_seconds() % 3600 < 900:
                 main_chat = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
                 poll_channel = self.bot.get_channel(poll['channel_id'])
