@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # Chave da IA
 
 # IDs dos Canais Fixos
 CHANNEL_RANKING = 1361499182304592012
