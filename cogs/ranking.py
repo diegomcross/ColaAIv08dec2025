@@ -10,57 +10,85 @@ import utils
 class RankingCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.voice_sessions = {} # {user_id: start_time}
+        # Armazena apenas QUEM está contando tempo AGORA
+        # {user_id: datetime_inicio}
+        self.active_timers = {} 
         self.update_ranking_loop.start()
+
+    def is_eligible(self, member):
+        """
+        Regras de Ouro para contar tempo:
+        1. Estar em canal de voz
+        2. NÃO estar mutado (mic) e NÃO estar ensurdecido (fone)
+        3. Ter companhia humana (Total de humanos no canal > 1)
+        """
+        if member.bot: return False
+        
+        voice = member.voice
+        if not voice or not voice.channel:
+            return False
+        
+        # Regra de Mute/Deaf (Vale tanto para o próprio quanto para mute de servidor)
+        if voice.self_mute or voice.self_deaf or voice.mute or voice.deaf:
+            return False
+            
+        # Regra de Companhia (Anti-Farm)
+        # Conta quantos humanos (não bots) estão no canal
+        humans_in_channel = [m for m in voice.channel.members if not m.bot]
+        if len(humans_in_channel) < 2:
+            return False
+            
+        return True
+
+    async def reconcile_session(self, member):
+        """
+        Avalia o estado atual do usuário e decide se Inicia ou Para o relógio.
+        """
+        user_id = member.id
+        now = datetime.datetime.now(BR_TIMEZONE)
+        should_be_counting = self.is_eligible(member)
+        is_counting = user_id in self.active_timers
+
+        if should_be_counting and not is_counting:
+            # INICIA O RELÓGIO
+            self.active_timers[user_id] = now
+            print(f"[▶️ PLAY] {member.display_name} começou a contar em '{member.voice.channel.name}'.")
+
+        elif not should_be_counting and is_counting:
+            # PARA O RELÓGIO E SALVA
+            start_time = self.active_timers.pop(user_id)
+            duration = (now - start_time).total_seconds() / 60
+            
+            if duration >= 1: # Só salva se tiver pelo menos 1 minuto
+                await db.log_voice_session(user_id, start_time, now, int(duration))
+                print(f"[⏸️ PAUSE] {member.display_name}: Salvo +{int(duration)} min. (Condição falhou ou saiu)")
+            else:
+                print(f"[⚠️ CURTO] {member.display_name}: Sessão descartada (<1 min).")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
-        now = datetime.datetime.now(BR_TIMEZONE)
+        # Lista de usuários que precisam ser reavaliados devido a essa mudança
+        users_to_check = set()
         
-        # [DEBUG GERAL] Loga qualquer mudança para garantir que o evento está sendo recebido
-        # Útil para saber se o bot tem permissão de ver o canal
-        status_mute = "Mutado" if (member.voice and (member.voice.self_mute or member.voice.mute)) else "Ativo"
-        status_deaf = "Ensdecido" if (member.voice and (member.voice.self_deaf or member.voice.deaf)) else "Ouvindo"
-        nome_canal = after.channel.name if after.channel else "Saiu"
-        print(f"[DEBUG-VOZ] {member.display_name} mudou estado: {status_mute} / {status_deaf} -> Canal: {nome_canal}")
-
-        # 1. Entrou no canal (e não está mutado) -> INÍCIO
-        if not before.channel and after.channel:
-            if not (member.voice.self_mute or member.voice.self_deaf or member.voice.mute or member.voice.deaf):
-                 self.voice_sessions[member.id] = now
-                 print(f"[✅ START] {member.display_name} iniciou contagem em '{after.channel.name}' às {now.strftime('%H:%M:%S')}.")
-            else:
-                 print(f"[⚠️ START-FALHOU] {member.display_name} entrou mas está mutado/surdo. Contagem não iniciada.")
+        # 1. O próprio usuário que mexeu
+        users_to_check.add(member)
         
-        # 2. Saiu ou Mutou -> FIM
-        elif before.channel and (not after.channel or after.self_mute or after.self_deaf):
-            if member.id in self.voice_sessions:
-                start_time = self.voice_sessions.pop(member.id)
-                
-                # Cálculo de tempo
-                duration_seconds = (now - start_time).total_seconds()
-                duration_minutes = duration_seconds / 60
-                
-                print(f"[🛑 STOP] {member.display_name} parou de contar. Duração bruta: {int(duration_minutes)}m {int(duration_seconds % 60)}s.")
+        # 2. Se saiu de um canal, reavalia TODOS que ficaram lá (podem ter ficado sozinhos)
+        if before.channel:
+            for m in before.channel.members:
+                users_to_check.add(m)
+        
+        # 3. Se entrou num canal, reavalia TODOS que já estavam lá (podem ter ganho companhia)
+        if after.channel:
+            for m in after.channel.members:
+                users_to_check.add(m)
 
-                # Regra Anti-Farm: Só conta se tinha mais de 1 pessoa no canal
-                # O membro que saiu ainda consta na lista 'before.channel.members' nesse instante
-                member_count = len(before.channel.members)
-                
-                if member_count > 1: 
-                    if duration_minutes > 1: # Mínimo 1 minuto
-                         await db.log_voice_session(member.id, start_time, now, int(duration_minutes))
-                         print(f"[💰 SALVANDO] Sessão de {member.display_name} validada! (+{int(duration_minutes)} min). Membros no canal: {member_count}")
-                    else:
-                        print(f"[⚠️ REJEITADO] {member.display_name}: Tempo muito curto (<1 min).")
-                else:
-                    print(f"[⚠️ ANTI-FARM] Sessão de {member.display_name} ignorada. Estava sozinho (Membros: {member_count}).")
-            else:
-                # Caso saia mas não tinha sessão aberta (ex: já estava mutado antes)
-                if not after.channel:
-                    print(f"[ℹ️ INFO] {member.display_name} desconectou, mas não estava contando tempo (provavelmente já estava mutado).")
+        # Processa a lista (remove bots da checagem)
+        for m in users_to_check:
+            if not m.bot:
+                await self.reconcile_session(m)
 
-    # --- COMANDO PARA VERIFICAR TEMPO (MANUAL) ---
+    # --- COMANDO /VER_TEMPO ---
     @app_commands.command(name="ver_tempo", description="Admin: Verifica o tempo de voz (Relatório Privado).")
     @app_commands.describe(dias="Quantos dias atrás analisar? (Padrão 7)", usuario="Verificar um usuário específico")
     async def check_voice_time(self, interaction: discord.Interaction, dias: int = 7, usuario: discord.Member = None):
@@ -68,43 +96,49 @@ class RankingCog(commands.Cog):
         try:
             data = await db.get_voice_hours(dias)
             if not data:
-                return await interaction.followup.send(f"❌ Nenhum registro de voz encontrado nos últimos {dias} dias.", ephemeral=True)
+                return await interaction.followup.send(f"❌ Nenhum registro encontrado nos últimos {dias} dias.", ephemeral=True)
 
             hours_map = {r['user_id']: r['total_mins'] for r in data}
 
             if usuario:
                 mins = hours_map.get(usuario.id, 0)
-                hours = int(mins / 60)
-                minutes = int(mins % 60)
-                clean_name = utils.clean_voter_name(usuario.display_name)
-                await interaction.followup.send(f"⏱️ **Relatório de {clean_name}** ({dias} dias):\nTempo Total: **{hours}h {minutes}m**", ephemeral=True)
+                h, m = divmod(int(mins), 60)
+                clean = utils.clean_voter_name(usuario.display_name)
+                # Avisa se o usuário está contando tempo AGORA
+                status = "🟢 Contando agora!" if usuario.id in self.active_timers else "⚪ Parado"
+                await interaction.followup.send(f"⏱️ **{clean}** ({dias}d): **{h}h {m}m**\nStatus Atual: {status}", ephemeral=True)
             else:
                 sorted_data = sorted(hours_map.items(), key=lambda x: x[1], reverse=True)
-                lines = [f"📊 **Relatório de Voz (Últimos {dias} dias)**"]
+                lines = [f"📊 **Top Voz (Últimos {dias} dias)**"]
                 for i, (uid, mins) in enumerate(sorted_data[:20]):
-                    member = interaction.guild.get_member(uid)
-                    name = utils.clean_voter_name(member.display_name) if member else f"User {uid}"
-                    h = int(mins / 60)
-                    m = int(mins % 60)
-                    lines.append(f"**{i+1}. {name}**: {h}h {m}m")
+                    mem = interaction.guild.get_member(uid)
+                    name = utils.clean_voter_name(mem.display_name) if mem else f"User {uid}"
+                    h, m = divmod(int(mins), 60)
+                    
+                    # Indicador visual se está online na voz contando
+                    live = "🟢" if uid in self.active_timers else ""
+                    lines.append(f"**{i+1}. {name}**: {h}h {m}m {live}")
                 
-                if not sorted_data: lines.append("_Nenhum dado._")
                 await interaction.followup.send("\n".join(lines), ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"Erro ao buscar dados: {e}", ephemeral=True)
+            await interaction.followup.send(f"Erro: {e}", ephemeral=True)
 
-    # --- ATUALIZAÇÃO AUTOMÁTICA (A CADA 30 MINUTOS) ---
+    # --- RANKING AUTOMÁTICO ---
     @tasks.loop(minutes=30)
     async def update_ranking_loop(self):
-        """Atualiza Leaderboard e Cargos"""
-        print(f"[🔄 LOOP] Iniciando atualização do Ranking de Voz (Ciclo de 30min)...")
-        
         guild = self.bot.guilds[0] if self.bot.guilds else None
-        if not guild: 
-            print("[🔄 LOOP] Erro: Guilda não encontrada.")
-            return
+        if not guild: return
 
-        # Pega dados do banco
+        # Força salvamento de todos os timers ativos para atualizar o ranking com o tempo atual
+        # (Isso faz "parciais" de tempo em vez de esperar a pessoa sair para contar no ranking)
+        now = datetime.datetime.now(BR_TIMEZONE)
+        for user_id, start_time in list(self.active_timers.items()):
+            duration = (now - start_time).total_seconds() / 60
+            if duration >= 1:
+                await db.log_voice_session(user_id, start_time, now, int(duration))
+                self.active_timers[user_id] = now # Reseta o timer para 'agora' para continuar contando
+
+        # Gera Ranking
         data_7d = await db.get_voice_hours(7)
         data_14d = await db.get_voice_hours(14)
         
@@ -112,43 +146,31 @@ class RankingCog(commands.Cog):
         hours_14d = {r['user_id']: r['total_mins']/60 for r in data_14d}
         
         leaderboard = []
-        
         for member in guild.members:
             if member.bot: continue
-            
             h7 = hours_7d.get(member.id, 0)
-            if h7 == 0: continue # Ignora quem tem 0 horas
+            if h7 == 0: continue
 
             h14 = hours_14d.get(member.id, 0)
             rank = "INATIVO"
-            
-            # Lógica de Cargos
             if h7 >= RANK_THRESHOLDS['MESTRE']: rank = "MESTRE ⭐"
             elif h7 >= RANK_THRESHOLDS['ADEPTO']: rank = "ADEPTO ⚔️"
             elif h7 >= RANK_THRESHOLDS['VANGUARDA']: rank = "VANGUARDA ⚡"
             elif h14 >= RANK_THRESHOLDS['ATIVO']: rank = "ATIVO"
             elif h14 >= RANK_THRESHOLDS['TURISTA']: rank = "TURISTA 🟢"
             
-            clean_name = utils.clean_voter_name(member.display_name)
-            leaderboard.append({'name': clean_name, 'h7': h7, 'rank': rank})
+            leaderboard.append({'name': utils.clean_voter_name(member.display_name), 'h7': h7, 'rank': rank})
 
-        # Ordenar e Exibir
         leaderboard.sort(key=lambda x: x['h7'], reverse=True)
         
-        top_player = leaderboard[0]['name'] if leaderboard else 'Ninguém'
-        print(f"[🔄 LOOP] Ranking calculado. {len(leaderboard)} usuários ranqueados. Top 1: {top_player}")
-
         channel = guild.get_channel(config.CHANNEL_RANKING)
         if channel:
             desc = ""
-            if not leaderboard:
-                desc = "*Ainda não há registros de atividade esta semana.*"
-            else:
-                for i, p in enumerate(leaderboard[:20]):
-                    desc += f"**{i+1}. {p['name']}**: {p['rank']}\n"
+            for i, p in enumerate(leaderboard[:20]):
+                desc += f"**{i+1}. {p['name']}**: {p['rank']}\n"
             
-            embed = discord.Embed(title="🏆 Ranking de Atividade (Voz - 7 Dias)", description=desc, color=discord.Color.gold())
-            embed.set_footer(text=f"Atualizado em {datetime.datetime.now(BR_TIMEZONE).strftime('%H:%M')}")
+            embed = discord.Embed(title="🏆 Ranking de Atividade (Voz - 7 Dias)", description=desc or "*Sem dados*", color=discord.Color.gold())
+            embed.set_footer(text=f"Atualizado em {now.strftime('%H:%M')}")
             
             try:
                 last_msg = None
@@ -156,16 +178,9 @@ class RankingCog(commands.Cog):
                     if msg.author == self.bot.user:
                         last_msg = msg
                         break
-                
-                if last_msg:
-                    await last_msg.edit(embed=embed)
-                    print("[🔄 LOOP] Mensagem de Ranking editada com sucesso.")
-                else:
-                    await channel.purge(limit=5)
-                    await channel.send(embed=embed)
-                    print("[🔄 LOOP] Nova mensagem de Ranking enviada.")
-            except Exception as e:
-                print(f"[RANKING ERRO] Falha ao enviar/editar mensagem: {e}")
+                if last_msg: await last_msg.edit(embed=embed)
+                else: await channel.send(embed=embed)
+            except: pass
 
     @update_ranking_loop.before_loop
     async def before_ranking_loop(self):
