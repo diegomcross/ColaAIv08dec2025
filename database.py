@@ -45,14 +45,14 @@ async def init_db():
                 is_valid BOOLEAN DEFAULT 1
             )
         """)
-        # Tabela de Configurações (Gerentes)
+        # Tabela de Configurações
         await db.execute("""
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
                 manager_role_id INTEGER
             )
         """)
-        # Tabela de Votos V2 (Suporta múltiplos votos por usuário)
+        # Tabela de Votos V2
         await db.execute("""
             CREATE TABLE IF NOT EXISTS poll_votes_v2 (
                 poll_message_id INTEGER,
@@ -72,9 +72,32 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # --- NOVAS TABELAS PARA CONTROLE DE PRESENÇA ---
+        
+        # Controle de ciclo de vida (quais avisos já foram dados)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS event_lifecycle (
+                event_id INTEGER PRIMARY KEY,
+                maybe_alert_sent BOOLEAN DEFAULT 0,
+                start_alert_sent BOOLEAN DEFAULT 0,
+                late_report_sent BOOLEAN DEFAULT 0
+            )
+        """)
+        
+        # Registro de presença (quem realmente apareceu)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS event_attendance (
+                event_id INTEGER,
+                user_id INTEGER,
+                status TEXT DEFAULT 'absent',
+                first_seen_at TIMESTAMP,
+                PRIMARY KEY (event_id, user_id)
+            )
+        """)
         await db.commit()
 
-# --- Eventos ---
+# --- Funções Originais (Eventos, RSVP, etc) ---
 async def create_event(data):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
@@ -115,7 +138,6 @@ async def delete_event(event_id):
         await db.execute("DELETE FROM events WHERE event_id = ?", (event_id,))
         await db.commit()
 
-# --- RSVP ---
 async def update_rsvp(event_id, user_id, status):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR REPLACE INTO rsvps (event_id, user_id, status) VALUES (?, ?, ?)", (event_id, user_id, status))
@@ -127,7 +149,6 @@ async def get_rsvps(event_id):
         async with db.execute("SELECT * FROM rsvps WHERE event_id = ? ORDER BY timestamp ASC", (event_id,)) as cursor:
             return await cursor.fetchall()
 
-# --- Configurações (Gerentes) ---
 async def set_manager_id(guild_id, role_or_user_id):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR REPLACE INTO guild_settings (guild_id, manager_role_id) VALUES (?, ?)", (guild_id, role_or_user_id))
@@ -140,7 +161,6 @@ async def get_manager_id(guild_id):
             row = await cursor.fetchone()
             return row['manager_role_id'] if row else None
 
-# --- Voz ---
 async def log_voice_session(user_id, start, end, duration):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT INTO voice_sessions (user_id, start_time, end_time, duration_minutes) VALUES (?, ?, ?, ?)", 
@@ -150,7 +170,6 @@ async def log_voice_session(user_id, start, end, duration):
 async def get_voice_hours(days_back):
     limit_date = datetime.datetime.now() - datetime.timedelta(days=days_back)
     async with aiosqlite.connect(DB_NAME) as db:
-        # --- CORREÇÃO AQUI: Adicionado row_factory ---
         db.row_factory = aiosqlite.Row 
         async with db.execute("""
             SELECT user_id, SUM(duration_minutes) as total_mins 
@@ -181,20 +200,17 @@ async def get_poll_details(message_id):
         async with db.execute("SELECT * FROM polls WHERE message_id = ?", (message_id,)) as cursor:
             return await cursor.fetchone()
 
-# Verifica voto atual do usuário para permitir toggle
 async def check_user_vote_on_option(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT 1 FROM poll_votes_v2 WHERE poll_message_id = ? AND user_id = ? AND vote_option = ?", (message_id, user_id, option)) as cursor:
             return await cursor.fetchone() is not None
 
-# Remove um voto específico
 async def remove_poll_vote_option(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM poll_votes_v2 WHERE poll_message_id = ? AND user_id = ? AND vote_option = ?", (message_id, user_id, option))
         await db.commit()
 
-# Adiciona voto
 async def add_poll_vote(message_id, user_id, option):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR IGNORE INTO poll_votes_v2 (poll_message_id, user_id, vote_option) VALUES (?, ?, ?)", 
@@ -228,3 +244,38 @@ async def close_poll(message_id):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE polls SET status = 'closed' WHERE message_id = ?", (message_id,))
         await db.commit()
+
+# --- NOVAS FUNÇÕES: CICLO DE VIDA E PRESENÇA ---
+
+async def get_event_lifecycle(event_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM event_lifecycle WHERE event_id = ?", (event_id,)) as cursor:
+            return await cursor.fetchone()
+
+async def set_lifecycle_flag(event_id, flag_name, value=1):
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Garante que a linha existe
+        await db.execute("INSERT OR IGNORE INTO event_lifecycle (event_id) VALUES (?)", (event_id,))
+        # Atualiza a flag específica
+        query = f"UPDATE event_lifecycle SET {flag_name} = ? WHERE event_id = ?"
+        await db.execute(query, (value, event_id))
+        await db.commit()
+
+async def mark_attendance_present(event_id, user_id):
+    now = datetime.datetime.now()
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            INSERT INTO event_attendance (event_id, user_id, status, first_seen_at) 
+            VALUES (?, ?, 'present', ?)
+            ON CONFLICT(event_id, user_id) 
+            DO UPDATE SET status = 'present', first_seen_at = COALESCE(first_seen_at, excluded.first_seen_at)
+        """, (event_id, user_id, now))
+        await db.commit()
+
+async def get_attendance_status(event_id, user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT status FROM event_attendance WHERE event_id = ? AND user_id = ?", (event_id, user_id)) as cursor:
+            row = await cursor.fetchone()
+            return row['status'] if row else 'absent'
