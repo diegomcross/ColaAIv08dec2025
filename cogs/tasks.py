@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands  # <--- Adicionado (Faltava isso!)
 from discord.ext import commands, tasks
 import datetime
 import random
@@ -11,7 +12,6 @@ import google.generativeai as genai
 from google.api_core import exceptions
 
 # --- LISTA DE PREFERÊNCIA ---
-# Prioridade para o 1.5 Flash (mais rápido e maior cota)
 PREFERRED_MODELS = [
     "models/gemini-1.5-flash",
     "models/gemini-1.5-flash-latest",
@@ -20,7 +20,7 @@ PREFERRED_MODELS = [
     "models/gemini-1.0-pro"
 ]
 
-# --- FALLBACKS (Plano B) ---
+# --- FALLBACKS ---
 FALLBACK_MOTIVATIONAL = [
     "Bom dia, Guardião! O Testemunha virou fumaça, mas o seu loot continua lá esperando. Vamos farmar!",
     "Acorda! Se um Titã consegue comer uma caixa de giz de cera antes do café e ficar bem, você consegue enfrentar essa manhã.",
@@ -70,14 +70,12 @@ class TasksCog(commands.Cog):
             models = await asyncio.to_thread(genai.list_models)
             available_names = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
             
-            # Tenta encontrar o melhor modelo da nossa lista
             for pref in PREFERRED_MODELS:
                 if pref in available_names:
                     self.active_model_name = pref
                     print(f"[IA] ✅ Modelo Ativo: {pref}")
                     return
 
-            # Se não achar nenhum preferido, pega o primeiro que der
             if available_names:
                 self.active_model_name = available_names[0]
                 print(f"[IA] ⚠️ Modelo Genérico: {self.active_model_name}")
@@ -89,7 +87,6 @@ class TasksCog(commands.Cog):
             print(f"[IA] ❌ Erro config: {e}")
 
     async def generate_ai_message(self, mode="motivacional"):
-        # Se falhar a configuração ou não tiver modelo, retorna None (vai pro Fallback)
         if not self.active_model_name:
             await self.setup_ai()
             if not self.active_model_name: return None
@@ -108,7 +105,6 @@ class TasksCog(commands.Cog):
 
         try:
             model = genai.GenerativeModel(self.active_model_name)
-            # Adiciona timeout para não travar
             response = await asyncio.wait_for(
                 asyncio.to_thread(model.generate_content, prompt), 
                 timeout=10.0
@@ -117,14 +113,14 @@ class TasksCog(commands.Cog):
             
         except exceptions.ResourceExhausted:
             print("[IA] ⏳ Cota excedida (429). Usando Fallback.")
-            return None # Retorna None para ativar o Fallback silenciosamente
+            return None
         except Exception as e:
             print(f"[IA ERRO] {e}")
             return None
         
         return None
 
-    # --- COMANDO DE TESTE (Ajustado) ---
+    # --- COMANDO DE TESTE ---
     @app_commands.command(name="debug_bomdia", description="Teste rápido de IA (7 msgs).")
     async def debug_bomdia(self, interaction: discord.Interaction):
         # ID Fixo ou Atual
@@ -138,8 +134,6 @@ class TasksCog(commands.Cog):
             mode = "jururu" if is_hacked else "motivacional"
             
             frase = await self.generate_ai_message(mode=mode)
-            
-            # Se a IA falhou (cota ou erro), pega do fallback e avisa no log
             source = "IA"
             if not frase:
                 frase = random.choice(FALLBACK_JURURU if is_hacked else FALLBACK_MOTIVATIONAL)
@@ -154,7 +148,7 @@ class TasksCog(commands.Cog):
             else:
                 await channel.send(f"🌞 **[TESTE {i}/7 - {source}] Bom dia!**\n\n{frase}")
             
-            if i < 7: await asyncio.sleep(20) # Intervalo maior para evitar cota
+            if i < 7: await asyncio.sleep(20)
 
     # --- LOOP ORIGINAL ---
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
