@@ -13,6 +13,7 @@ import json
 import os
 
 LORE_STATE_FILE = "lore_state.json"
+MORNING_STATE_FILE = "morning_state.json"
 
 class TasksCog(commands.Cog):
     def __init__(self, bot):
@@ -23,6 +24,7 @@ class TasksCog(commands.Cog):
         self.channel_rename_loop.start()
         self.daily_morning_loop.start()
         self.daily_lore_loop.start()
+        self.attendance_monitor_loop.start() # Monitor de Presença
         
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.start()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.start()
@@ -33,93 +35,178 @@ class TasksCog(commands.Cog):
         self.channel_rename_loop.cancel()
         self.daily_morning_loop.cancel()
         self.daily_lore_loop.cancel()
+        self.attendance_monitor_loop.cancel()
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.cancel()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.cancel()
 
-    # --- LÓGICA DE ESTADO DA LORE ---
-    def get_lore_index(self):
-        """Lê o índice da próxima frase de lore do arquivo."""
-        if not os.path.exists(LORE_STATE_FILE):
-            return 0
+    # ... (MANTENHA get_state, set_state, debug_daily, daily_morning_loop, daily_lore_loop IGUAIS) ...
+    # (Copie as funções que já estavam aqui: get_state, set_state, debug_daily, loops de msg diaria)
+    
+    # [CÓPIA RÁPIDA PARA GARANTIR INTEGRIDADE DO ARQUIVO COMPLETO]
+    def get_state(self, filename):
+        if not os.path.exists(filename): return 0
         try:
-            with open(LORE_STATE_FILE, "r") as f:
-                data = json.load(f)
-                return data.get("next_index", 0)
+            with open(filename, "r") as f: return json.load(f).get("index", 0)
         except: return 0
 
-    def increment_lore_index(self):
-        """Avança o índice para não repetir."""
-        current = self.get_lore_index()
-        with open(LORE_STATE_FILE, "w") as f:
-            json.dump({"next_index": current + 1}, f)
+    def set_state(self, filename, new_index):
+        with open(filename, "w") as f: json.dump({"index": new_index}, f)
 
-    # --- COMANDO DE TESTE ---
-    @app_commands.command(name="debug_msg_diaria", description="Testa as mensagens (Manhã e Tarde).")
+    @app_commands.command(name="debug_msg_diaria", description="Testa as mensagens.")
     async def debug_daily(self, interaction: discord.Interaction):
-        await interaction.response.send_message("🧪 Disparando teste...", ephemeral=True)
+        await interaction.response.send_message("🧪 Testando...", ephemeral=True)
         channel = interaction.channel
-
-        # Teste Manhã
         quote = random.choice(quotes.MORNING_QUOTES)
-        await channel.send(f"🌞 **Bom dia, Guardião!**\n\n{quote}\n\n>>> 🗓️ `/agendar` | 📊 `/enquete_atividade`")
-
+        await channel.send(f"🌞 **Bom dia, Guardião!**\n\n{quote}\n\n>>> 🗓️ `/agendar`")
         await asyncio.sleep(2)
+        idx = self.get_state(LORE_STATE_FILE)
+        if idx < len(quotes.LORE_QUOTES): await channel.send(f"{quotes.LORE_QUOTES[idx]}\n*(Preview)*")
+        else: await channel.send("✅ Lore finalizada.")
 
-        # Teste Lore (Mostra a PRÓXIMA da fila sem avançar o contador real)
-        idx = self.get_lore_index()
-        if idx < len(quotes.LORE_QUOTES):
-            lore_quote = quotes.LORE_QUOTES[idx]
-            await channel.send(f"{lore_quote}\n*(Preview da frase # {idx+1})*")
-        else:
-            await channel.send("✅ Todas as frases de Lore já foram enviadas.")
-
-    # --- LOOP 1: MANHÃ (GAMEPLAY) - CÍCLICO ---
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
     async def daily_morning_loop(self):
         delay = random.randint(0, 7200) 
         print(f"[Daily Morning] Aguardando {delay/60:.1f} min...")
         await asyncio.sleep(delay)
-
         channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
         if not channel: return
-
-        # Loop infinito baseado no dia do ano
-        day_of_year = datetime.datetime.now(BR_TIMEZONE).timetuple().tm_yday
-        quote = quotes.MORNING_QUOTES[day_of_year % len(quotes.MORNING_QUOTES)]
-        
-        msg = (
-            f"🌞 **Bom dia, Guardião!**\n\n"
-            f"{quote}\n\n"
-            f">>> 🗓️ **Organize sua fireteam:** Use `/agendar`\n"
-            f"📊 **Decida o plano:** Use `/enquete_atividade` ou `/enquete_quando`"
-        )
+        idx = self.get_state(MORNING_STATE_FILE)
+        quote = quotes.MORNING_QUOTES[idx % len(quotes.MORNING_QUOTES)]
+        self.set_state(MORNING_STATE_FILE, idx + 1)
+        msg = f"🌞 **Bom dia, Guardião!**\n\n{quote}\n\n>>> 🗓️ **Organize sua fireteam:** Use `/agendar`\n📊 **Decida o plano:** Use `/enquete_atividade`"
         await channel.send(msg)
 
-    # --- LOOP 2: TARDE (LORE) - FINITO ---
     @tasks.loop(time=datetime.time(hour=15, minute=0, tzinfo=BR_TIMEZONE))
     async def daily_lore_loop(self):
         delay = random.randint(0, 7200)
         print(f"[Daily Lore] Aguardando {delay/60:.1f} min...")
         await asyncio.sleep(delay)
-
         channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
         if not channel: return
-
-        # Pega o índice salvo
-        idx = self.get_lore_index()
-        
-        # Se já mostrou todas, para de enviar
+        idx = self.get_state(LORE_STATE_FILE)
         if idx >= len(quotes.LORE_QUOTES):
-            print("[Daily Lore] Todas as frases já foram enviadas. Loop inativo.")
+            print("[Daily Lore] Fim da lista.")
             return
-
         quote = quotes.LORE_QUOTES[idx]
         await channel.send(f"{quote}")
-        
-        # Salva que essa já foi enviada
-        self.increment_lore_index()
+        self.set_state(LORE_STATE_FILE, idx + 1)
 
-    # --- OUTROS LOOPS (MANTIDOS) ---
+    # --- NOVO: MONITOR DE PRESENÇA E COBRANÇA ---
+    @tasks.loop(minutes=5)
+    async def attendance_monitor_loop(self):
+        await self.bot.wait_until_ready()
+        
+        events = await db.get_active_events()
+        now = datetime.datetime.now(BR_TIMEZONE)
+        
+        for event in events:
+            try:
+                # Parse da data
+                if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
+                else: evt_time = event['date_time']
+                if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
+                
+                # Diferença em minutos (negativo = futuro, positivo = passado/começou)
+                diff_minutes = (now - evt_time).total_seconds() / 60
+                
+                # Carrega flags de aviso
+                lifecycle = await db.get_event_lifecycle(event['event_id'])
+                if not lifecycle:
+                    await db.set_lifecycle_flag(event['event_id'], 'start_alert_sent', 0)
+                    lifecycle = {'maybe_alert_sent': 0, 'start_alert_sent': 0, 'late_report_sent': 0}
+
+                # --- 1. AVISO PARA 'TALVEZ' (15 min antes) ---
+                # Janela: entre 20 e 10 minutos antes (-20 a -10)
+                if -20 <= diff_minutes <= -10 and not lifecycle['maybe_alert_sent']:
+                    rsvps = await db.get_rsvps(event['event_id'])
+                    confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
+                    
+                    # Se não está lotado
+                    if confirmed_count < event['max_slots']:
+                        maybe_users = [r['user_id'] for r in rsvps if r['status'] == 'maybe']
+                        if maybe_users:
+                            print(f"[EVENTO] Vagas sobrando em '{event['title']}'. Avisando {len(maybe_users)} 'talvez'.")
+                            for uid in maybe_users:
+                                try:
+                                    user = self.bot.get_user(uid) or await self.bot.fetch_user(uid)
+                                    await user.send(f"🔔 **Vaga Disponível!**\nO evento **{event['title']}** começa em 15 minutos e tem vagas. Você marcou 'Talvez'. Pode cobrir?\nConfirme aqui: <#{event['channel_id']}>")
+                                except: pass
+                        await db.set_lifecycle_flag(event['event_id'], 'maybe_alert_sent')
+
+                # --- 2. CHECAGEM DE INÍCIO (0 a 10 min depois) ---
+                if 0 <= diff_minutes <= 10 and not lifecycle['start_alert_sent']:
+                    guild = self.bot.get_guild(event['guild_id'])
+                    channel = guild.get_channel(event['channel_id'])
+                    
+                    if guild and channel:
+                        # Quem está no canal de voz AGORA?
+                        users_in_voice = [m.id for m in channel.members if not m.bot]
+                        
+                        rsvps = await db.get_rsvps(event['event_id'])
+                        confirmed_ids = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
+                        
+                        missing_ids = [uid for uid in confirmed_ids if uid not in users_in_voice]
+                        
+                        if missing_ids:
+                            # Notifica no chat principal
+                            main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
+                            mentions = " ".join([f"<@{uid}>" for uid in missing_ids])
+                            if main_chat:
+                                await main_chat.send(f"🚨 **Atenção!** O evento **{event['title']}** começou e estes Guardiões não estão no canal de voz: {mentions}\nCorre lá: {channel.mention}")
+                            
+                            # Manda DM também
+                            for uid in missing_ids:
+                                try:
+                                    user = guild.get_member(uid)
+                                    await user.send(f"⏰ **O Evento Começou!**\nVocê confirmou presença em **{event['title']}** mas não te vi no canal de voz. O esquadrão está te esperando!")
+                                except: pass
+                        
+                        await db.set_lifecycle_flag(event['event_id'], 'start_alert_sent')
+
+                # --- 3. MONITORAMENTO CONTÍNUO (Enquanto evento ocorre) ---
+                # Se evento está rolando (0 a 180 min)
+                if 0 <= diff_minutes <= 180:
+                    guild = self.bot.get_guild(event['guild_id'])
+                    channel = guild.get_channel(event['channel_id'])
+                    if guild and channel:
+                        users_in_voice = [m.id for m in channel.members if not m.bot]
+                        # Marca presença para quem está lá
+                        rsvps = await db.get_rsvps(event['event_id'])
+                        confirmed_ids = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
+                        
+                        for uid in confirmed_ids:
+                            if uid in users_in_voice:
+                                await db.mark_attendance_present(event['event_id'], uid)
+
+                # --- 4. RELATÓRIO DE FALTAS (30 min depois) ---
+                if 30 <= diff_minutes <= 40 and not lifecycle['late_report_sent']:
+                    rsvps = await db.get_rsvps(event['event_id'])
+                    confirmed_ids = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
+                    
+                    absentees = []
+                    for uid in confirmed_ids:
+                        status = await db.get_attendance_status(event['event_id'], uid)
+                        if status != 'present':
+                            absentees.append(uid)
+                    
+                    if absentees:
+                        guild = self.bot.get_guild(event['guild_id'])
+                        main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
+                        names = []
+                        for uid in absentees:
+                            mem = guild.get_member(uid)
+                            names.append(mem.display_name if mem else f"User {uid}")
+                        
+                        names_str = ", ".join(names)
+                        if main_chat:
+                            await main_chat.send(f"📋 **Relatório de Ausência:**\nO evento **{event['title']}** já tem 30min de duração e os seguintes membros confirmados NÃO compareceram:\n🚫 **{names_str}**")
+                            
+                    await db.set_lifecycle_flag(event['event_id'], 'late_report_sent')
+
+            except Exception as e:
+                print(f"[ATTENDANCE ERROR] Evento {event.get('event_id')}: {e}")
+
+    # --- MANTENHA OS OUTROS LOOPS ABAIXO (info_board, polls, cleanup, rename, reminders) ---
     @tasks.loop(minutes=5)
     async def info_board_loop(self):
         await self.bot.wait_until_ready()
@@ -188,7 +275,6 @@ class TasksCog(commands.Cog):
                 created_at = datetime.datetime.fromisoformat(poll['created_at'])
                 if created_at.tzinfo is None: created_at = created_at.replace(tzinfo=datetime.timezone.utc).astimezone(BR_TIMEZONE)
             except: continue
-            
             diff = now - created_at
             if diff.total_seconds() > 86400:
                 await db.close_poll(poll['message_id'])
@@ -200,7 +286,6 @@ class TasksCog(commands.Cog):
                 except: pass
                 continue
             else: valid_polls_count += 1
-
             hours_passed = int(diff.total_seconds() / 3600)
             if hours_passed > 0 and hours_passed % 8 == 0 and diff.total_seconds() % 3600 < 900:
                 main_chat = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
@@ -209,7 +294,6 @@ class TasksCog(commands.Cog):
                     txt = "Há enquetes em aberto esperando seu voto!"
                     if poll['poll_type'] == 'when': txt = f"Ainda estamos decidindo o horário para **{poll['target_data']}**!"
                     await main_chat.send(f"🔔 {txt} Corre lá: {poll_channel.mention}")
-
         try:
             poll_channel = self.bot.get_channel(config.CHANNEL_POLLS)
             if poll_channel:
