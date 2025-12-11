@@ -1,5 +1,4 @@
 import discord
-from discord import app_commands
 from discord.ext import commands, tasks
 import datetime
 import random
@@ -9,27 +8,33 @@ import utils
 import config
 from constants import BR_TIMEZONE
 import google.generativeai as genai
+from google.api_core import exceptions
 
-# --- LISTA DE MODELOS PARA TENTAR ---
-AI_MODELS_TO_TRY = [
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash-exp",
-    "gemini-1.0-pro",
-    "gemini-pro"
+# --- LISTA DE PREFERÊNCIA ---
+# Prioridade para o 1.5 Flash (mais rápido e maior cota)
+PREFERRED_MODELS = [
+    "models/gemini-1.5-flash",
+    "models/gemini-1.5-flash-latest",
+    "models/gemini-1.5-pro",
+    "models/gemini-2.0-flash-exp",
+    "models/gemini-1.0-pro"
 ]
 
-# --- FALLBACKS ---
+# --- FALLBACKS (Plano B) ---
 FALLBACK_MOTIVATIONAL = [
     "Bom dia, Guardião! O Testemunha virou fumaça, mas o seu loot continua lá esperando. Vamos farmar!",
     "Acorda! Se um Titã consegue comer uma caixa de giz de cera antes do café e ficar bem, você consegue enfrentar essa manhã.",
-    "O Viajante curou o Coração Pálido, agora trate de curar essa preguiça!",
+    "O Viajante curou o Coração Pálido, agora trate de curar essa preguiça! Vamos à luta.",
+    "Se o Corvo aguentou a culpa de ser o Uldren por tanto tempo, você aguenta levantar cedo hoje. Força!",
+    "Rahool pode te dar um item azul num engrama lendário, mas hoje o dia promete ser Exótico! Não desperdice seu RNG dormindo."
 ]
 
 FALLBACK_JURURU = [
     "Corta essa baboseira. O Mestre Rahool me contou que aquele Exótico que você quer NÃO vai cair hoje. Aceita.",
     "Bom dia? Só se for pro inimigo. Você chama isso de 'Build'? Até um Dreg na ZME tem mais sinergia.",
     "Bip. Bop. O Cayde-6 não morreu heroicamente para você errar a Super desse jeito vergonhoso.",
+    "A Luz te dá imortalidade apenas para que você possa errar o pulo na Raid infinitas vezes. O Viajante comete erros.",
+    "Não se preocupe com A Forma Final. A sua forma atual de jogar já é trágica o suficiente."
 ]
 
 class TasksCog(commands.Cog):
@@ -37,7 +42,6 @@ class TasksCog(commands.Cog):
         self.bot = bot
         self.active_model_name = None 
         
-        # Inicia loops
         self.cleanup_loop.start()
         self.reminders_loop.start()
         self.channel_rename_loop.start()
@@ -45,7 +49,6 @@ class TasksCog(commands.Cog):
         if hasattr(self, 'info_board_loop'): self.info_board_loop.start()
         self.daily_morning_loop.start()
         
-        # Configura IA
         self.bot.loop.create_task(self.setup_ai())
 
     def cog_unload(self):
@@ -58,29 +61,35 @@ class TasksCog(commands.Cog):
 
     async def setup_ai(self):
         if not hasattr(config, 'GEMINI_API_KEY') or not config.GEMINI_API_KEY:
-            print("[IA] ⚠️ Nenhuma chave de API encontrada.")
+            print("[IA] ⚠️ Sem chave API. Modo Offline.")
             return
 
         try:
             genai.configure(api_key=config.GEMINI_API_KEY)
-            print("[IA] Buscando lista de modelos disponíveis...")
+            print("[IA] Configurando modelos...")
             models = await asyncio.to_thread(genai.list_models)
             available_names = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
             
-            for pref in AI_MODELS_TO_TRY:
-                full_name = f"models/{pref}" if not pref.startswith("models/") else pref
-                if full_name in available_names:
-                    self.active_model_name = full_name
-                    print(f"[IA] ✅ Modelo selecionado: {full_name}")
+            # Tenta encontrar o melhor modelo da nossa lista
+            for pref in PREFERRED_MODELS:
+                if pref in available_names:
+                    self.active_model_name = pref
+                    print(f"[IA] ✅ Modelo Ativo: {pref}")
                     return
 
+            # Se não achar nenhum preferido, pega o primeiro que der
             if available_names:
                 self.active_model_name = available_names[0]
-                print(f"[IA] ⚠️ Usando genérico: {self.active_model_name}")
+                print(f"[IA] ⚠️ Modelo Genérico: {self.active_model_name}")
+                return
+            
+            print("[IA] ❌ Nenhum modelo compatível encontrado.")
+
         except Exception as e:
-            print(f"[IA] ❌ Erro ao configurar: {e}")
+            print(f"[IA] ❌ Erro config: {e}")
 
     async def generate_ai_message(self, mode="motivacional"):
+        # Se falhar a configuração ou não tiver modelo, retorna None (vai pro Fallback)
         if not self.active_model_name:
             await self.setup_ai()
             if not self.active_model_name: return None
@@ -88,60 +97,64 @@ class TasksCog(commands.Cog):
         if mode == "jururu":
             prompt = (
                 "Aja como Jururu (Blue), a fantasma sarcástica e ácida do Drifter em Destiny 2. "
-                "Escreva uma mensagem curta (máx 200 caracteres) interrompendo um 'bom dia' otimista. "
-                "Critique o jogador (mira ruim, build feia, RNG injusto). "
-                "Termine de forma seca e cômica."
+                "Escreva uma frase curta (máx 200 caracteres) interrompendo um 'bom dia'. "
+                "Seja cômica e desmotivacional. Critique o jogador."
             )
         else:
             prompt = (
-                "Escreva uma mensagem de 'Bom dia' curta (máx 280 caracteres), muito engraçada e motivacional para um clã de Destiny 2. "
-                "Faça referência à lore atual (Fikrul, Ecos, Revenant). "
-                "Faça piadas com classes (Titãs, Caçadores, Arcanos) ou mecânicas (RNG, Rahool). "
-                "Termine com um tom de 'Vamos à luta, Guardião!'."
+                "Escreva uma frase de 'Bom dia' curta (máx 280 caracteres), engraçada e motivacional para clã de Destiny 2. "
+                "Use lore atual (Fikrul, Ecos). Termine com 'Vamos à luta, Guardião!'."
             )
 
         try:
             model = genai.GenerativeModel(self.active_model_name)
-            response = await asyncio.to_thread(model.generate_content, prompt)
+            # Adiciona timeout para não travar
+            response = await asyncio.wait_for(
+                asyncio.to_thread(model.generate_content, prompt), 
+                timeout=10.0
+            )
             if response.text: return response.text.strip()
+            
+        except exceptions.ResourceExhausted:
+            print("[IA] ⏳ Cota excedida (429). Usando Fallback.")
+            return None # Retorna None para ativar o Fallback silenciosamente
         except Exception as e:
             print(f"[IA ERRO] {e}")
-            if "404" in str(e) or "not found" in str(e).lower(): self.active_model_name = None
             return None
-
-    # --- COMANDO DE TESTE (NOVO) ---
-    @app_commands.command(name="debug_bomdia", description="Admin: Testa 7 mensagens de bom dia com IA (15s delay).")
-    async def debug_bomdia(self, interaction: discord.Interaction):
-        # ID Fixo solicitado
-        TARGET_ID = 1385769340149829682
-        channel = self.bot.get_channel(TARGET_ID)
         
-        # Se não achar o canal fixo, usa o atual
-        if not channel:
-            channel = interaction.channel
-            await interaction.response.send_message(f"⚠️ Canal de teste {TARGET_ID} não encontrado. Usando este canal!", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"🧪 Iniciando teste de IA em {channel.mention}. (7 mensagens, 15s intervalo)", ephemeral=True)
+        return None
+
+    # --- COMANDO DE TESTE (Ajustado) ---
+    @app_commands.command(name="debug_bomdia", description="Teste rápido de IA (7 msgs).")
+    async def debug_bomdia(self, interaction: discord.Interaction):
+        # ID Fixo ou Atual
+        TARGET_ID = 1385769340149829682
+        channel = self.bot.get_channel(TARGET_ID) or interaction.channel
+        
+        await interaction.response.send_message(f"🧪 Testando IA em {channel.mention}...", ephemeral=True)
 
         for i in range(1, 8):
-            # Aumentei a chance da Jururu no teste (40%) para garantir que ela apareça
             is_hacked = random.random() < 0.4
             mode = "jururu" if is_hacked else "motivacional"
             
             frase = await self.generate_ai_message(mode=mode)
-            if not frase: frase = f"[Teste {i}] Falha na IA (Fallback ativado)."
+            
+            # Se a IA falhou (cota ou erro), pega do fallback e avisa no log
+            source = "IA"
+            if not frase:
+                frase = random.choice(FALLBACK_JURURU if is_hacked else FALLBACK_MOTIVATIONAL)
+                source = "Fallback"
 
             if is_hacked:
                 embed = discord.Embed(
-                    description=f"🔵 **[TESTE {i}/7] CONEXÃO INTERROMPIDA...**\n\n*\"Chega dessa baboseira. Aqui é a Jururu.\"*\n\n💀 **Mensagem:**\n> {frase}",
+                    description=f"🔵 **[TESTE {i}/7 - {source}] INTERROMPIDO...**\n\n*\"Chega dessa baboseira. Aqui é a Jururu.\"*\n\n💀 **Mensagem:**\n> {frase}",
                     color=discord.Color.dark_teal()
                 )
                 await channel.send(embed=embed)
             else:
-                await channel.send(f"🌞 **[TESTE {i}/7] Bom dia!**\n\n{frase}")
+                await channel.send(f"🌞 **[TESTE {i}/7 - {source}] Bom dia!**\n\n{frase}")
             
-            if i < 7:
-                await asyncio.sleep(15)
+            if i < 7: await asyncio.sleep(20) # Intervalo maior para evitar cota
 
     # --- LOOP ORIGINAL ---
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
