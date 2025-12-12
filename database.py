@@ -6,6 +6,9 @@ DB_NAME = "clan_bot.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
+        # ... (OUTRAS TABELAS MANTIDAS: events, rsvps, voice_sessions, etc) ...
+        # Copie as tabelas events, rsvps, voice_sessions, guild_settings, polls, poll_votes_v2 do código anterior
+        
         # Tabela de Eventos
         await db.execute("""
             CREATE TABLE IF NOT EXISTS events (
@@ -23,7 +26,6 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
-        # Tabela de RSVPs
         await db.execute("""
             CREATE TABLE IF NOT EXISTS rsvps (
                 event_id INTEGER,
@@ -34,7 +36,6 @@ async def init_db():
                 FOREIGN KEY(event_id) REFERENCES events(event_id) ON DELETE CASCADE
             )
         """)
-        # Tabela de Voz
         await db.execute("""
             CREATE TABLE IF NOT EXISTS voice_sessions (
                 session_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,14 +46,12 @@ async def init_db():
                 is_valid BOOLEAN DEFAULT 1
             )
         """)
-        # Tabela de Configurações
         await db.execute("""
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
                 manager_role_id INTEGER
             )
         """)
-        # Tabela de Votos V2
         await db.execute("""
             CREATE TABLE IF NOT EXISTS poll_votes_v2 (
                 poll_message_id INTEGER,
@@ -72,20 +71,20 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # --- NOVAS TABELAS PARA CONTROLE DE PRESENÇA ---
-        
-        # Controle de ciclo de vida (quais avisos já foram dados)
+
+        # --- ATUALIZAÇÃO DA TABELA DE CICLO DE VIDA ---
+        # Adicionei 'reminder_1h_sent' para controlar o aviso de 1 hora
         await db.execute("""
             CREATE TABLE IF NOT EXISTS event_lifecycle (
                 event_id INTEGER PRIMARY KEY,
                 maybe_alert_sent BOOLEAN DEFAULT 0,
                 start_alert_sent BOOLEAN DEFAULT 0,
-                late_report_sent BOOLEAN DEFAULT 0
+                late_report_sent BOOLEAN DEFAULT 0,
+                reminder_1h_sent BOOLEAN DEFAULT 0
             )
         """)
         
-        # Registro de presença (quem realmente apareceu)
+        # Tabela de Presença
         await db.execute("""
             CREATE TABLE IF NOT EXISTS event_attendance (
                 event_id INTEGER,
@@ -95,9 +94,19 @@ async def init_db():
                 PRIMARY KEY (event_id, user_id)
             )
         """)
+        
+        # Migração de segurança (caso a tabela já exista sem a coluna nova)
+        try:
+            await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_1h_sent BOOLEAN DEFAULT 0")
+        except: pass # Coluna já existe
+        
         await db.commit()
 
-# --- Funções Originais (Eventos, RSVP, etc) ---
+# ... (MANTENHA AS FUNÇÕES DE CREATE/GET/UPDATE EVENTS, RSVPS, POLLS IGUAIS AO ANTERIOR) ...
+# Vou incluir apenas as funções novas ou alteradas abaixo para economizar espaço, 
+# mas no seu arquivo final mantenha TUDO.
+
+# --- COPIAR AQUI TODAS AS FUNÇÕES PADRÃO (create_event, get_active_events, update_rsvp, etc) ---
 async def create_event(data):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
@@ -179,7 +188,6 @@ async def get_voice_hours(days_back):
         """, (limit_date,)) as cursor:
             return await cursor.fetchall()
 
-# --- Enquetes ---
 async def create_poll(message_id, channel_id, guild_id, poll_type, target_data):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("""
@@ -245,7 +253,7 @@ async def close_poll(message_id):
         await db.execute("UPDATE polls SET status = 'closed' WHERE message_id = ?", (message_id,))
         await db.commit()
 
-# --- NOVAS FUNÇÕES: CICLO DE VIDA E PRESENÇA ---
+# --- FUNÇÕES DE CICLO DE VIDA (ATUALIZADAS) ---
 
 async def get_event_lifecycle(event_id):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -255,11 +263,23 @@ async def get_event_lifecycle(event_id):
 
 async def set_lifecycle_flag(event_id, flag_name, value=1):
     async with aiosqlite.connect(DB_NAME) as db:
-        # Garante que a linha existe
         await db.execute("INSERT OR IGNORE INTO event_lifecycle (event_id) VALUES (?)", (event_id,))
-        # Atualiza a flag específica
         query = f"UPDATE event_lifecycle SET {flag_name} = ? WHERE event_id = ?"
         await db.execute(query, (value, event_id))
+        await db.commit()
+
+async def reset_event_lifecycle_flags(event_id):
+    """Reseta todos os avisos para que o bot possa notificar novamente (usado ao mudar data)."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Zera todas as flags: aviso de 'talvez', aviso de 'começou', relatórios e lembrete de 1h
+        await db.execute("""
+            UPDATE event_lifecycle 
+            SET maybe_alert_sent = 0, 
+                start_alert_sent = 0, 
+                late_report_sent = 0,
+                reminder_1h_sent = 0
+            WHERE event_id = ?
+        """, (event_id,))
         await db.commit()
 
 async def mark_attendance_present(event_id, user_id):
