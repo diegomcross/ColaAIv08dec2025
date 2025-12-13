@@ -6,9 +6,6 @@ DB_NAME = "clan_bot.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # ... (OUTRAS TABELAS MANTIDAS: events, rsvps, voice_sessions, etc) ...
-        # Copie as tabelas events, rsvps, voice_sessions, guild_settings, polls, poll_votes_v2 do código anterior
-        
         # Tabela de Eventos
         await db.execute("""
             CREATE TABLE IF NOT EXISTS events (
@@ -26,6 +23,7 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
+        # Tabela de RSVPs
         await db.execute("""
             CREATE TABLE IF NOT EXISTS rsvps (
                 event_id INTEGER,
@@ -36,6 +34,7 @@ async def init_db():
                 FOREIGN KEY(event_id) REFERENCES events(event_id) ON DELETE CASCADE
             )
         """)
+        # Tabela de Voz
         await db.execute("""
             CREATE TABLE IF NOT EXISTS voice_sessions (
                 session_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,12 +45,14 @@ async def init_db():
                 is_valid BOOLEAN DEFAULT 1
             )
         """)
+        # Tabela de Configurações
         await db.execute("""
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
                 manager_role_id INTEGER
             )
         """)
+        # Tabela de Votos V2
         await db.execute("""
             CREATE TABLE IF NOT EXISTS poll_votes_v2 (
                 poll_message_id INTEGER,
@@ -60,6 +61,7 @@ async def init_db():
                 PRIMARY KEY (poll_message_id, user_id, vote_option)
             )
         """)
+        # Tabela de Enquetes
         await db.execute("""
             CREATE TABLE IF NOT EXISTS polls (
                 message_id INTEGER PRIMARY KEY,
@@ -71,9 +73,8 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # --- ATUALIZAÇÃO DA TABELA DE CICLO DE VIDA ---
-        # Adicionei 'reminder_1h_sent' para controlar o aviso de 1 hora
+        
+        # Tabelas de Ciclo de Vida e Presença
         await db.execute("""
             CREATE TABLE IF NOT EXISTS event_lifecycle (
                 event_id INTEGER PRIMARY KEY,
@@ -84,7 +85,6 @@ async def init_db():
             )
         """)
         
-        # Tabela de Presença
         await db.execute("""
             CREATE TABLE IF NOT EXISTS event_attendance (
                 event_id INTEGER,
@@ -95,18 +95,65 @@ async def init_db():
             )
         """)
         
-        # Migração de segurança (caso a tabela já exista sem a coluna nova)
-        try:
-            await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_1h_sent BOOLEAN DEFAULT 0")
-        except: pass # Coluna já existe
+        # Migração de segurança para colunas novas
+        try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_1h_sent BOOLEAN DEFAULT 0")
+        except: pass
         
         await db.commit()
 
-# ... (MANTENHA AS FUNÇÕES DE CREATE/GET/UPDATE EVENTS, RSVPS, POLLS IGUAIS AO ANTERIOR) ...
-# Vou incluir apenas as funções novas ou alteradas abaixo para economizar espaço, 
-# mas no seu arquivo final mantenha TUDO.
+# --- FUNÇÕES DE MANUTENÇÃO E ANÁLISE (NOVAS) ---
 
-# --- COPIAR AQUI TODAS AS FUNÇÕES PADRÃO (create_event, get_active_events, update_rsvp, etc) ---
+async def prune_old_voice_data(days=90):
+    """Apaga logs de voz muito antigos para economizar espaço."""
+    limit_date = datetime.datetime.now() - datetime.timedelta(days=days)
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM voice_sessions WHERE start_time < ?", (limit_date,))
+        await db.commit()
+
+async def get_sessions_in_range(user_id, days_back):
+    """Retorna todas as sessões (validas e invalidas) de um usuario nos ultimos X dias."""
+    limit_date = datetime.datetime.now() - datetime.timedelta(days=days_back)
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT start_time, duration_minutes, is_valid 
+            FROM voice_sessions 
+            WHERE user_id = ? AND start_time > ?
+        """, (user_id, limit_date)) as cursor:
+            return await cursor.fetchall()
+
+async def get_last_activity_timestamp(user_id):
+    """Busca a última vez que o usuário foi visto em voz ou eventos."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        
+        # Última voz
+        async with db.execute("SELECT MAX(start_time) as last_voice FROM voice_sessions WHERE user_id = ?", (user_id,)) as c:
+            voice_row = await c.fetchone()
+            last_voice = voice_row['last_voice'] if voice_row and voice_row['last_voice'] else None
+
+        # Último evento (presença)
+        async with db.execute("SELECT MAX(first_seen_at) as last_event FROM event_attendance WHERE user_id = ?", (user_id,)) as c:
+            event_row = await c.fetchone()
+            last_event = event_row['last_event'] if event_row and event_row['last_event'] else None
+
+        # Retorna o mais recente
+        if not last_voice and not last_event: return None
+        if not last_voice: return last_event
+        if not last_event: return last_voice
+        
+        try:
+            lv_dt = datetime.datetime.fromisoformat(str(last_voice)) if isinstance(last_voice, str) else last_voice
+            le_dt = datetime.datetime.fromisoformat(str(last_event)) if isinstance(last_event, str) else last_event
+            # Normalizar timezone se necessário
+            if lv_dt.tzinfo is None: lv_dt = lv_dt.replace(tzinfo=None)
+            if le_dt.tzinfo is None: le_dt = le_dt.replace(tzinfo=None)
+            return max(lv_dt, le_dt)
+        except:
+            return last_voice
+
+# --- FUNÇÕES DE EVENTOS ---
+
 async def create_event(data):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
@@ -147,6 +194,8 @@ async def delete_event(event_id):
         await db.execute("DELETE FROM events WHERE event_id = ?", (event_id,))
         await db.commit()
 
+# --- FUNÇÕES DE RSVP ---
+
 async def update_rsvp(event_id, user_id, status):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR REPLACE INTO rsvps (event_id, user_id, status) VALUES (?, ?, ?)", (event_id, user_id, status))
@@ -157,6 +206,8 @@ async def get_rsvps(event_id):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM rsvps WHERE event_id = ? ORDER BY timestamp ASC", (event_id,)) as cursor:
             return await cursor.fetchall()
+
+# --- FUNÇÕES DE CONFIGURAÇÃO (GERENTES) ---
 
 async def set_manager_id(guild_id, role_or_user_id):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -170,10 +221,12 @@ async def get_manager_id(guild_id):
             row = await cursor.fetchone()
             return row['manager_role_id'] if row else None
 
-async def log_voice_session(user_id, start, end, duration):
+# --- FUNÇÕES DE VOZ (UPDATED) ---
+
+async def log_voice_session(user_id, start, end, duration, is_valid=1):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT INTO voice_sessions (user_id, start_time, end_time, duration_minutes) VALUES (?, ?, ?, ?)", 
-                         (user_id, start, end, duration))
+        await db.execute("INSERT INTO voice_sessions (user_id, start_time, end_time, duration_minutes, is_valid) VALUES (?, ?, ?, ?, ?)", 
+                         (user_id, start, end, duration, is_valid))
         await db.commit()
 
 async def get_voice_hours(days_back):
@@ -187,6 +240,8 @@ async def get_voice_hours(days_back):
             GROUP BY user_id
         """, (limit_date,)) as cursor:
             return await cursor.fetchall()
+
+# --- FUNÇÕES DE ENQUETES ---
 
 async def create_poll(message_id, channel_id, guild_id, poll_type, target_data):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -253,7 +308,7 @@ async def close_poll(message_id):
         await db.execute("UPDATE polls SET status = 'closed' WHERE message_id = ?", (message_id,))
         await db.commit()
 
-# --- FUNÇÕES DE CICLO DE VIDA (ATUALIZADAS) ---
+# --- FUNÇÕES DE CICLO DE VIDA E PRESENÇA (EVENTOS) ---
 
 async def get_event_lifecycle(event_id):
     async with aiosqlite.connect(DB_NAME) as db:
