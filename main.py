@@ -14,7 +14,7 @@ class ClanBot(commands.Bot):
         await database.init_db()
         
         # 2. Cogs
-        extensions = ['cogs.events', 'cogs.tasks', 'cogs.ranking', 'cogs.polls'] # Adicionado polls
+        extensions = ['cogs.events', 'cogs.tasks', 'cogs.ranking', 'cogs.polls', 'cogs.roles'] 
         for ext in extensions:
             try:
                 await self.load_extension(ext)
