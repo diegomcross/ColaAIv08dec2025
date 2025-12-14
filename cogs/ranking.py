@@ -38,7 +38,6 @@ class RankingCog(commands.Cog):
     async def reconcile_session(self, member):
         """
         Registra entrada/saída.
-        Diferente da versão anterior, agora registramos TUDO, mas com a flag is_valid.
         """
         user_id = member.id
         now = datetime.datetime.now(BR_TIMEZONE)
@@ -47,9 +46,8 @@ class RankingCog(commands.Cog):
         is_counting = user_id in self.active_timers
 
         if is_in_voice and not is_counting:
-            # INICIA O RELÓGIO (Independente de estar sozinho ou mutado)
+            # INICIA O RELÓGIO (Sempre que entrar)
             self.active_timers[user_id] = now
-            # print(f"[▶️ LOG] {member.display_name} entrou em voz.")
 
         elif not is_in_voice and is_counting:
             # SAIU DA VOZ -> SALVA SESSÃO
@@ -57,30 +55,50 @@ class RankingCog(commands.Cog):
             duration = (now - start_time).total_seconds() / 60
             
             if duration >= 1:
-                # Checa se a sessão foi "Válida" (Anti-Farm) baseada no estado FINAL
-                # (Limitação técnica: checamos o estado ao sair ou periodicamente. 
-                # Para ser perfeito precisaria logar cada troca de mute, mas isso spamaria o banco)
-                # Vamos assumir: Se ele saiu, não temos o estado 'voice' dele mais.
-                # Então a validação real acontece no loop de 30min ou assumimos False se saiu?
-                # Melhor: Vamos confiar na validação periódica do loop para sessões longas.
-                # Para sessões curtas que terminam aqui, vamos assumir is_valid=0 por segurança 
-                # ou tentar recuperar o estado anterior (difícil).
-                # DECISÃO: Logamos como is_valid=0 aqui se não pudermos provar o contrário,
-                # MAS o loop update_ranking_loop vai salvar parciais com a flag correta.
-                
-                # Como o member.voice é None agora (ele saiu), não dá pra checar mute.
-                # Vamos salvar como presença genérica (0) aqui.
-                # As horas "Rankeadas" serão salvas principalmente pelo loop periódico enquanto ele ESTÁ no canal.
+                # Se saiu, não temos o estado 'voice' dele mais para validar.
+                # Assumimos presença geral (is_valid=0) para o trecho final.
                 await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=0)
-                # print(f"[⏹️ LOG] {member.display_name}: {int(duration)} min (Finalizado)")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
-        # Apenas dispara o reconciliador para quem mudou
+        # Dispara reconciliação para quem mudou
         if not member.bot:
             await self.reconcile_session(member)
 
-    # --- RANKING AUTOMÁTICO (E SALVAMENTO PERIÓDICO) ---
+    # --- COMANDO /VER_TEMPO ---
+    @app_commands.command(name="ver_tempo", description="Admin: Verifica o tempo de voz (Relatório Privado).")
+    @app_commands.describe(dias="Quantos dias atrás analisar? (Padrão 7)", usuario="Verificar um usuário específico")
+    async def check_voice_time(self, interaction: discord.Interaction, dias: int = 7, usuario: discord.Member = None):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            data = await db.get_voice_hours(dias)
+            if not data:
+                return await interaction.followup.send(f"❌ Nenhum registro encontrado nos últimos {dias} dias.", ephemeral=True)
+
+            hours_map = {r['user_id']: r['total_mins'] for r in data}
+
+            if usuario:
+                mins = hours_map.get(usuario.id, 0)
+                h, m = divmod(int(mins), 60)
+                clean = utils.clean_voter_name(usuario.display_name)
+                status = "🟢 Contando agora!" if usuario.id in self.active_timers else "⚪ Parado"
+                await interaction.followup.send(f"⏱️ **{clean}** ({dias}d): **{h}h {m}m**\nStatus Atual: {status}", ephemeral=True)
+            else:
+                sorted_data = sorted(hours_map.items(), key=lambda x: x[1], reverse=True)
+                lines = [f"📊 **Top Voz (Últimos {dias} dias)**"]
+                for i, (uid, mins) in enumerate(sorted_data[:20]):
+                    mem = interaction.guild.get_member(uid)
+                    name = utils.clean_voter_name(mem.display_name) if mem else f"User {uid}"
+                    h, m = divmod(int(mins), 60)
+                    
+                    live = "🟢" if uid in self.active_timers else ""
+                    lines.append(f"**{i+1}. {name}**: {h}h {m}m {live}")
+                
+                await interaction.followup.send("\n".join(lines), ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Erro: {e}", ephemeral=True)
+
+    # --- RANKING AUTOMÁTICO (VISUAL AGRUPADO) ---
     @tasks.loop(minutes=30)
     async def update_ranking_loop(self):
         guild = self.bot.guilds[0] if self.bot.guilds else None
@@ -88,28 +106,27 @@ class RankingCog(commands.Cog):
 
         now = datetime.datetime.now(BR_TIMEZONE)
         
-        # 1. SALVA PARCIAIS (Fundamental para Ranking funcionar)
-        # Verifica o estado ATUAL de cada um para definir is_valid
+        # 1. SALVA PARCIAIS
         for user_id, start_time in list(self.active_timers.items()):
             member = guild.get_member(user_id)
             if member and member.voice:
                 duration = (now - start_time).total_seconds() / 60
                 if duration >= 1:
-                    # AQUI validamos se conta para o Ranking ou só Presença
                     valid = 1 if self.check_validity_conditions(member) else 0
-                    
                     await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
-                    self.active_timers[user_id] = now # Reseta timer para continuar contando
+                    self.active_timers[user_id] = now 
 
-        # 2. GERA PLACAR (Apenas is_valid=1)
+        # 2. COLETA DADOS
         data_7d = await db.get_voice_hours(7)
         hours_map = {r['user_id']: r['total_mins']/60 for r in data_7d}
         
-        leaderboard = []
+        # Lista temporária para ordenar todos antes de agrupar
+        all_members_data = []
+
         for member in guild.members:
             if member.bot: continue
             
-            # FILTRO: Ignora Fundador e Moderador no PLACAR (mas os dados foram salvos no DB)
+            # FILTRO: Ignora Fundador e Moderador no PLACAR
             has_founder = any(r.id == config.ROLE_FOUNDER_ID for r in member.roles)
             has_mod = any(r.id == config.ROLE_MOD_ID for r in member.roles)
             if has_founder or has_mod:
@@ -118,25 +135,50 @@ class RankingCog(commands.Cog):
             h7 = hours_map.get(member.id, 0)
             if h7 == 0: continue
 
-            # Define Rank Estético
+            # Define Rank
             rank_title = "Membro"
             if h7 >= RANK_THRESHOLDS['MESTRE']: rank_title = "MESTRE ⭐"
             elif h7 >= RANK_THRESHOLDS['ADEPTO']: rank_title = "ADEPTO ⚔️"
             elif h7 >= RANK_THRESHOLDS['VANGUARDA']: rank_title = "VANGUARDA ⚡"
             elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_title = "ATIVO"
             
-            leaderboard.append({'name': utils.clean_voter_name(member.display_name), 'h7': h7, 'rank': rank_title})
+            all_members_data.append({'name': utils.clean_voter_name(member.display_name), 'h7': h7, 'rank': rank_title})
 
-        leaderboard.sort(key=lambda x: x['h7'], reverse=True)
-        
+        # Ordena geral por horas (maior para menor) para manter a ordem dentro dos grupos
+        all_members_data.sort(key=lambda x: x['h7'], reverse=True)
+
+        # 3. AGRUPA POR RANK
+        ranks_order = ["MESTRE ⭐", "ADEPTO ⚔️", "VANGUARDA ⚡", "ATIVO", "Membro"]
+        grouped_ranks = {k: [] for k in ranks_order}
+
+        for p in all_members_data:
+            if p['rank'] in grouped_ranks:
+                grouped_ranks[p['rank']].append(p['name'])
+
+        # 4. MONTA O EMBED
         channel = guild.get_channel(config.CHANNEL_RANKING)
         if channel:
             desc = ""
-            for i, p in enumerate(leaderboard[:20]):
-                desc += f"**{i+1}. {p['name']}**: {p['rank']} ({p['h7']:.1f}h)\n"
+            for rank in ranks_order:
+                names_list = grouped_ranks[rank]
+                if names_list:
+                    # Formata: Titulo do Rank em Negrito e nomes abaixo
+                    names_str = ", ".join(names_list)
+                    desc += f"### {rank}\n{names_str}\n\n"
             
-            embed = discord.Embed(title="🏆 Ranking de Atividade (Voz - 7 Dias)", description=desc or "*Sem dados*", color=discord.Color.gold())
-            embed.set_footer(text=f"Atualizado em {now.strftime('%H:%M')} • Staff oculto")
+            if not desc:
+                desc = "*O silêncio reina... Ninguém entrou em call essa semana.*"
+
+            embed = discord.Embed(
+                title="🏆  Ranking de Atividade (Voz - 7 Dias)", 
+                description=desc, 
+                color=discord.Color.gold()
+            )
+            
+            if guild.icon:
+                embed.set_thumbnail(url=guild.icon.url)
+                
+            embed.set_footer(text=f"Atualizado às {now.strftime('%H:%M')} • Staff não listado")
             
             try:
                 last_msg = None
