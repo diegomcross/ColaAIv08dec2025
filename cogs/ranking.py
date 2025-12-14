@@ -1,205 +1,253 @@
 import discord
-from discord import app_commands
-from discord.ext import commands, tasks
-import database as db
 import datetime
-import asyncio
-from constants import BR_TIMEZONE, RANK_THRESHOLDS
-import config
-import utils
+import dateparser
+import pytz
+import re
+from typing import Tuple, Optional, List, Dict
+from difflib import SequenceMatcher
 
-class RankingCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.active_timers = {} 
-        # Inicia o loop de horário fixo
-        self.update_ranking_loop.start()
+from constants import (
+    BR_TIMEZONE,
+    BRAZIL_TZ_STR,
+    RAID_INFO_PT,
+    MASMORRA_INFO_PT,
+    PVP_ACTIVITY_INFO_PT,
+    DIAS_SEMANA_PT_FULL,
+    DIAS_SEMANA_PT_SHORT,
+    ACTIVITY_EMOJIS,
+    ACTIVITY_MODES,
+    CHANNEL_NAME_MAPPINGS
+)
 
-    def cog_unload(self):
-        self.update_ranking_loop.cancel()
+# --- UTILITÁRIOS DE USUÁRIO ---
 
-    # --- EVENTO: AO INICIAR ---
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Força uma atualização imediata ao ligar o bot."""
-        print("[RANKING] Bot iniciado. Forçando atualização do placar...")
-        await asyncio.sleep(10) # Espera 10s para garantir que o cache de membros carregou
-        await self.update_ranking_board()
+async def get_user_display_name_static(user_id: int, bot: discord.Client, guild: discord.Guild) -> str:
+    if guild:
+        member = guild.get_member(user_id)
+        if member: return member.display_name
+    try:
+        user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+        return user.display_name
+    except: return f"User"
 
-    # --- COMANDO MANUAL (DEBUG) ---
-    @app_commands.command(name="forcar_ranking", description="Admin: Atualiza o Embed de Ranking imediatamente.")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def force_ranking(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        await self.update_ranking_board()
-        await interaction.followup.send("✅ Ranking atualizado com sucesso!", ephemeral=True)
+def clean_voter_name(display_name: str) -> str:
+    """Retorna apenas a primeira palavra, removendo números e símbolos, mas preservando caracteres especiais de nomes."""
+    if not display_name: return "User"
+    first_word = display_name.split()[0]
+    
+    # Regex Expandido para suportar nomes exóticos (ex: ĦUṈΓER):
+    # a-z, A-Z: Latim Básico
+    # \u00C0-\u024F: Latim Suplementar + Extendido A/B (Inclui Ħ, ç, acentos)
+    # \u1E00-\u1EFF: Latim Extendido Adicional (Inclui Ṉ)
+    # \u0370-\u03FF: Grego e Copta (Inclui Γ)
+    cleaned = re.sub(r'[^a-zA-Z\u00C0-\u024F\u1E00-\u1EFF\u0370-\u03FF]', '', first_word)
+    
+    return cleaned if cleaned else "User"
 
-    # --- LÓGICA DE TEMPO ---
-    def check_validity_conditions(self, member):
-        if member.bot: return False
-        voice = member.voice
-        if not voice or not voice.channel: return False
-        if voice.self_mute or voice.self_deaf or voice.mute or voice.deaf: return False
-        humans_in_channel = [m for m in voice.channel.members if not m.bot]
-        if len(humans_in_channel) < 2: return False
-        return True
+# --- UTILITÁRIOS DE DATA E EVENTO ---
 
-    async def reconcile_session(self, member):
-        user_id = member.id
-        now = datetime.datetime.now(BR_TIMEZONE)
-        is_in_voice = member.voice and member.voice.channel
-        is_counting = user_id in self.active_timers
+def format_datetime_for_embed(dt: datetime.datetime) -> Tuple[str, str]:
+    ts = int(dt.timestamp())
+    return f"<t:{ts}:f>", f"<t:{ts}:R>"
 
-        if is_in_voice and not is_counting:
-            self.active_timers[user_id] = now
-        elif not is_in_voice and is_counting:
-            start_time = self.active_timers.pop(user_id)
-            duration = (now - start_time).total_seconds() / 60
-            if duration >= 1:
-                await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=0)
+async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance: discord.Client) -> discord.Embed:
+    event_id = event_details.get('event_id', 'N/A')
+    guild_id = event_details.get('guild_id')
+    guild = bot_instance.get_guild(guild_id)
 
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        if not member.bot:
-            await self.reconcile_session(member)
+    act_type_db = event_details.get('activity_type', 'OUTRO')
+    color = discord.Color.blue()
+    if act_type_db == 'RAID': color = discord.Color.purple()
+    elif act_type_db == 'MASMORRA': color = discord.Color.orange()
+    elif act_type_db == 'PVP': color = discord.Color.red()
 
-    # --- LÓGICA PRINCIPAL DO EMBED ---
-    async def update_ranking_board(self):
-        guild = self.bot.get_guild(self.bot.guilds[0].id) if self.bot.guilds else None
-        if not guild: return
+    desc = f"**{event_details.get('description', '')}**"
+    embed = discord.Embed(title=event_details.get('title', 'Evento'), description=desc, color=color)
 
-        now = datetime.datetime.now(BR_TIMEZONE)
-        
-        # 1. SALVA PARCIAIS (Sincroniza quem está na call agora)
-        for user_id, start_time in list(self.active_timers.items()):
-            member = guild.get_member(user_id)
-            if member and member.voice:
-                duration = (now - start_time).total_seconds() / 60
-                if duration >= 1:
-                    valid = 1 if self.check_validity_conditions(member) else 0
-                    await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
-                    self.active_timers[user_id] = now 
+    # Tratamento robusto para data (suporta string ou objeto datetime)
+    raw_date = event_details.get('date_time', event_details.get('date'))
+    if isinstance(raw_date, str):
+        try: dt_obj = datetime.datetime.fromisoformat(raw_date)
+        except: dt_obj = datetime.datetime.now()
+    else: dt_obj = raw_date
+    if dt_obj and dt_obj.tzinfo is None: dt_obj = BR_TIMEZONE.localize(dt_obj)
 
-        # 2. COLETA DADOS
-        data_7d = await db.get_voice_hours(7)
-        hours_map = {r['user_id']: r['total_mins']/60 for r in data_7d}
-        
-        all_members_data = []
-        for member in guild.members:
-            if member.bot: continue
+    fmt_date, rel_time = format_datetime_for_embed(dt_obj)
+    embed.add_field(name="🗓️ Data e Hora", value=f"{fmt_date} ({rel_time})", inline=False)
+    
+    # Campo Tipo
+    display_type = act_type_db.capitalize() if act_type_db else "Outro"
+    if act_type_db == 'RAID': display_type = "Incursão"
+    embed.add_field(name="🎮 Tipo", value=display_type, inline=True)
+
+    # Campo Organizador
+    creator_id = event_details.get('creator_id')
+    creator_mention = f"<@{creator_id}>" if creator_id else "Desconhecido"
+    embed.add_field(name="👑 Organizador", value=creator_mention, inline=True)
+
+    # Listas de Presença
+    vou_user_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'confirmed']
+    le_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'waitlist']
+    nv_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'absent']
+    tv_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'maybe']
+
+    max_a = event_details.get('max_slots', 0)
+    vou_names = []
+    for uid in vou_user_ids:
+        name = await get_user_display_name_static(uid, bot_instance, guild)
+        vou_names.append(name)
+    
+    # Formatação das vagas (1. Nome / 2. _____)
+    vou_lines = []
+    if max_a > 0:
+        for i in range(max_a):
+            if i < len(vou_names): vou_lines.append(f"{i+1}. {vou_names[i]}")
+            else: vou_lines.append(f"{i+1}. _________")
+        vou_val = "\n".join(vou_lines)
+    else:
+        vou_val = "\n".join([f"{i+1}. {n}" for i, n in enumerate(vou_names)]) if vou_names else "Ninguém."
+
+    embed.add_field(name=f"✅ Confirmados ({len(vou_names)}/{max_a})", value=vou_val, inline=False)
+
+    if le_ids:
+        le_lines = [f"{i+1}. {await get_user_display_name_static(uid, bot_instance, guild)}" for i, uid in enumerate(le_ids)]
+        le_val = "\n".join(le_lines)
+        embed.add_field(name=f"⏳ Lista de Espera ({len(le_ids)})", value=le_val, inline=False)
+
+    if nv_ids:
+        nv_names = [await get_user_display_name_static(uid, bot_instance, guild) for uid in nv_ids]
+        embed.add_field(name=f"❌ Não vou ({len(nv_ids)})", value=", ".join(nv_names), inline=True)
+
+    if tv_ids:
+        tv_names = [await get_user_display_name_static(uid, bot_instance, guild) for uid in tv_ids]
+        embed.add_field(name=f"🔷 Talvez ({len(tv_ids)})", value=", ".join(tv_names), inline=True)
+
+    embed.add_field(name="ℹ️ Como Participar", value="Use os botões abaixo para confirmar presença. Se lotar, você vai para a fila de espera.", inline=False)
+    embed.set_footer(text=f"ID do Evento: {event_id}")
+    return embed
+
+# --- PARSING E DETECÇÃO ---
+
+def normalize_date_str(date_str: str) -> str:
+    text = date_str.lower()
+    replacements = {
+        r'\bterca\b': 'terça', r'\bterça\b': 'terça-feira',
+        r'\bsegunda\b': 'segunda-feira', r'\bquarta\b': 'quarta-feira',
+        r'\bquinta\b': 'quinta-feira', r'\bsexta\b': 'sexta-feira',
+        r'\bsabado\b': 'sábado', r'\bdomingo\b': 'domingo',
+        r'\bamanha\b': 'amanhã', r'\bhoje\b': 'hoje',
+    }
+    for pattern, repl in replacements.items():
+        text = re.sub(pattern, repl, text)
+    # 20h -> 20:00
+    text = re.sub(r'(\d{1,2})[hH](?!\w)', r'\1:00', text)
+    text = re.sub(r'(\d{1,2})[hH](\d{2})', r'\1:\2', text)
+    return text
+
+def parse_human_date(date_str: str) -> Optional[datetime.datetime]:
+    if not date_str: return None
+    clean_date_str = normalize_date_str(date_str)
+    now = datetime.datetime.now(BR_TIMEZONE)
+    settings = {'PREFER_DATES_FROM': 'future', 'RELATIVE_BASE': now.replace(tzinfo=None), 'TIMEZONE': 'America/Sao_Paulo', 'RETURN_AS_TIMEZONE_AWARE': True, 'DATE_ORDER': 'DMY', 'PREFER_DAY_OF_MONTH': 'current'}
+    
+    dt = dateparser.parse(clean_date_str, settings=settings, languages=['pt'])
+    if not dt: return None
+    
+    if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
+    
+    # Se data > 6 meses, tenta ajustar ano (ex: input "01/01" em Dezembro não deve ir pra 2026)
+    if (dt - now).days > 180:
+        try_year_current = dt.replace(year=now.year)
+        if try_year_current > now: dt = try_year_current
             
-            # FILTRO STAFF (Nota: Se você for Staff, você NÃO vai aparecer no ranking)
-            if any(r.id in [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID] for r in member.roles):
-                continue
+    return dt
 
-            # DEFINE O RANK VISUAL
-            # Se tiver cargo de Inativo, aparece como Inativo
-            if member.get_role(config.ROLE_INATIVO):
-                rank_title = "INATIVOS 🚷"
-                h7 = 0
-            else:
-                h7 = hours_map.get(member.id, 0)
-                if h7 >= RANK_THRESHOLDS['MESTRE']: rank_title = "MASTER ⭐"
-                elif h7 >= RANK_THRESHOLDS['ADEPTO']: rank_title = "ADEPTO ⚔️"
-                elif h7 >= RANK_THRESHOLDS['VANGUARDA']: rank_title = "VANGUARDA ⚡"
-                elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_title = "ATIVOS 🟢" 
-                elif h7 >= RANK_THRESHOLDS['TURISTA']: rank_title = "TURISTAS 🧳"
-                else: rank_title = "TURISTAS 🧳" # Todo mundo começa aqui
+def detect_activity_details(user_input: str) -> Tuple[str, str, int]:
+    text_lower = user_input.lower()
+    
+    # Helper interno
+    def check_match(catalog, type_name, default_slots):
+        for official_name, aliases in catalog.items():
+            # Match exato no nome oficial
+            if official_name.lower() in text_lower: 
+                return official_name, type_name, default_slots
+            # Match nos apelidos (aliases)
+            for alias in aliases:
+                # Alias exato isolado ou parte da string
+                if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower):
+                    return official_name, type_name, default_slots
+        return None
 
-            all_members_data.append({'name': utils.clean_voter_name(member.display_name), 'h7': h7, 'rank': rank_title})
+    # Tenta Raids
+    match = check_match(RAID_INFO_PT, 'RAID', 6)
+    if match: return match
+    
+    # Tenta Masmorras
+    match = check_match(MASMORRA_INFO_PT, 'MASMORRA', 3)
+    if match: return match
+    
+    # Tenta PvP
+    match = check_match(PVP_ACTIVITY_INFO_PT, 'PVP', 3)
+    if match: return match
 
-        # Ordena por horas (maior para menor)
-        all_members_data.sort(key=lambda x: x['h7'], reverse=True)
+    # Padrão
+    return user_input.strip().title(), 'OUTRO', None
 
-        # 3. AGRUPA OS NOMES
-        ranks_config = {
-            "MASTER ⭐": [],
-            "ADEPTO ⚔️": [],
-            "VANGUARDA ⚡": [],
-            "ASCENDENTE 🚀": [],
-            "TURISTAS 🧳": [],
-            "ATIVOS 🟢": [],
-            "INATIVOS 🚷": []
-        }
-
-        for p in all_members_data:
-            key = p['rank']
-            if key in ranks_config:
-                ranks_config[key].append(p['name'])
-            elif "ATIVOS" in key: ranks_config["ATIVOS 🟢"].append(p['name'])
-            else: ranks_config["TURISTAS 🧳"].append(p['name'])
-
-        # 4. CONSTRÓI O EMBED
-        embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
-        
-        # -- MASTER (Topo) --
-        masters = ranks_config.pop("MASTER ⭐")
-        if masters:
-            # Markdown header # para ficar grande
-            master_str = "\n".join([f"> 👑 **{name}**" for name in masters])
-            embed.description = f"# 🥇  MASTER  ⭐\n{master_str}\n\n━━━━━━━━━━━━━━━━━━━━━━"
-        else:
-            embed.description = "# 🥇  MASTER  ⭐\n> *O trono está vazio...*\n\n━━━━━━━━━━━━━━━━━━━━━━"
-
-        # -- TIERS MÉDIOS (Inline) --
-        mid_tiers = ["ADEPTO ⚔️", "VANGUARDA ⚡"]
-        for rank in mid_tiers:
-            names = ranks_config.get(rank, [])
-            value = "\n".join([f"• {n}" for n in names]) if names else "*Vazio*"
-            embed.add_field(name=f"{rank} ({len(names)})", value=value, inline=True)
-        
-        # -- TIERS BAIXOS (Nova linha) --
-        # Adiciona campo vazio para quebrar linha se necessário, ou confia no Discord
-        embed.add_field(name="\u200b", value="\u200b", inline=False) 
-
-        low_tiers = ["TURISTAS 🧳", "ATIVOS 🟢", "INATIVOS 🚷"]
-        for rank in low_tiers:
-            names = ranks_config.get(rank, [])
-            # Limita a 15 nomes para não poluir
-            if len(names) > 15:
-                display = names[:15]
-                value = "\n".join([f"• {n}" for n in display]) + f"\n*...e mais {len(names)-15}*"
-            else:
-                value = "\n".join([f"• {n}" for n in names]) if names else "*Vazio*"
+def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free_slots: int, description: str = "") -> str:
+    emoji1 = ACTIVITY_EMOJIS.get(type_key, ACTIVITY_EMOJIS['OUTRO'])
+    
+    emoji2 = ""
+    search_text = (title + " " + description).lower()
+    for keyword, icon in ACTIVITY_MODES.items():
+        if keyword in search_text:
+            emoji2 = icon
+            break
             
-            embed.add_field(name=f"{rank}", value=value, inline=True)
+    simple_name = title
+    if title in CHANNEL_NAME_MAPPINGS:
+        simple_name = CHANNEL_NAME_MAPPINGS[title]
+    else:
+        for official_key, simple_val in CHANNEL_NAME_MAPPINGS.items():
+            if official_key.lower() in title.lower():
+                simple_name = simple_val
+                break
+    
+    clean_name = simple_name.lower().replace(' ', '-')
+    # Remove caracteres especiais mas mantém acentos pt-br principais para leitura
+    clean_name = ''.join(e for e in clean_name if e.isalnum() or e == '-' or e in ['à', 'á', 'â', 'ã', 'é', 'ê', 'í', 'ó', 'ô', 'õ', 'ú', 'ç']) 
+    
+    now = datetime.datetime.now(BR_TIMEZONE)
+    days_diff = (dt.date() - now.date()).days
+    weekday = DIAS_SEMANA_PT_SHORT[dt.weekday()].lower()
+    
+    if days_diff < 7:
+        time_str = dt.strftime('%Hh%M').replace('h00', 'h')
+        slots_str = "lotado" if free_slots <= 0 else f"{free_slots}vagas"
+        name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{time_str}-{slots_str}"
+    else:
+        date_str = dt.strftime('%d-%m')
+        name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{date_str}"
+        
+    return name[:100]
 
-        # -- RODAPÉ --
-        info_text = (
-            "🎙️ **Como subir de Rank?**\n"
-            "Participe das calls em grupo com o áudio aberto (microfone também) e o bot vai logar cada minuto.\n"
-            "Os minutos sozinho na call ou mutado contam apenas como 'Presença', mas não pontuam para o **Master**!"
-        )
-        embed.add_field(name="⠀", value=info_text, inline=False)
-
-        if guild.icon: embed.set_thumbnail(url=guild.icon.url)
-        embed.set_footer(text=f"Atualizado às {now.strftime('%H:%M')} • Staff não listado")
-
-        # ENVIA OU EDITA
-        channel = guild.get_channel(config.CHANNEL_RANKING)
-        if channel:
-            try:
-                last_msg = None
-                async for msg in channel.history(limit=10):
-                    if msg.author == self.bot.user:
-                        last_msg = msg
-                        break
-                if last_msg: await last_msg.edit(embed=embed)
-                else: await channel.send(embed=embed)
-            except Exception as e:
-                print(f"[RANKING ERROR] Falha ao enviar embed: {e}")
-
-    # --- LOOP AGENDADO (:00 e :30) ---
-    times_list = [datetime.time(hour=h, minute=m, tzinfo=BR_TIMEZONE) for h in range(24) for m in [0, 30]]
-
-    @tasks.loop(time=times_list)
-    async def update_ranking_loop(self):
-        await self.bot.wait_until_ready()
-        await self.update_ranking_board()
-
-    @update_ranking_loop.before_loop
-    async def before_ranking_loop(self):
-        await self.bot.wait_until_ready()
-
-async def setup(bot):
-    await bot.add_cog(RankingCog(bot))
+def format_activity_name(raw_name: str) -> str:
+    """
+    Transforma 'camara mestre' em 'Câmara de Cristal (Mestre) 💀⭐'
+    """
+    official_name, type_key, _ = detect_activity_details(raw_name)
+    
+    emoji1 = ACTIVITY_EMOJIS.get(type_key, "")
+    
+    emoji2 = ""
+    mode_str = ""
+    search_text = raw_name.lower()
+    
+    for keyword, icon in ACTIVITY_MODES.items():
+        if keyword in search_text:
+            emoji2 = icon
+            mode_str = f" ({keyword.capitalize()})"
+            break
+            
+    # Monta a string final
+    full_name = f"{official_name}{mode_str} {emoji1}{emoji2}".strip()
+    return full_name
