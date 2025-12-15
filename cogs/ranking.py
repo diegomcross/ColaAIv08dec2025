@@ -146,43 +146,56 @@ class RankingCog(commands.Cog):
             elif "ATIVOS" in key: ranks_config["ATIVOS 🟢"].append(p['name'])
             else: ranks_config["TURISTAS 🧳"].append(p['name'])
 
-        # 4. CONSTRÓI O EMBED
+        # 4. CONSTRÓI O EMBED (DESIGN NOVO)
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
         
-        # -- MASTER (Topo) --
+        # -- MASTER (Topo em Destaque com Quote) --
         masters = ranks_config.pop("MASTER ⭐")
         if masters:
+            # Uso do > para criar um bloco de citação lateral, destacando o nome
             master_str = "\n".join([f"> 👑 **{name}**" for name in masters])
-            embed.description = f"# 🥇  MASTER  ⭐\n{master_str}\n\n━━━━━━━━━━━━━━━━━━━━━━"
+            embed.description = f"### 🥇 MASTER ⭐\n{master_str}"
         else:
-            embed.description = "# 🥇  MASTER  ⭐\n> *O trono está vazio...*\n\n━━━━━━━━━━━━━━━━━━━━━━"
+            embed.description = "### 🥇 MASTER ⭐\n> *O trono está vazio...*"
 
-        # -- TIERS MÉDIOS (Inline) --
+        # -- TIERS MÉDIOS (Lista Vertical Limpa) --
+        # Usamos inline=True para ficarem lado a lado no PC, e empilharem bonito no mobile
         mid_tiers = ["ADEPTO ⚔️", "VANGUARDA ⚡"]
         for rank in mid_tiers:
             names = ranks_config.get(rank, [])
-            value = "\n".join([f"• {n}" for n in names]) if names else "*Vazio*"
+            # Usa bloco de código simples `Nome` para destacar
+            value = "\n".join([f"`{n}`" for n in names]) if names else "*Vazio*"
             embed.add_field(name=f"{rank} ({len(names)})", value=value, inline=True)
         
-        # -- TIERS BAIXOS (Nova linha) --
+        # Quebra de linha forçada para separar a Elite da Galera
         embed.add_field(name="\u200b", value="\u200b", inline=False) 
 
+        # -- TIERS BAIXOS (Lista Horizontal Compacta) --
+        # Aqui mudamos para horizontal (separado por vírgula) para economizar tela no celular
         low_tiers = ["TURISTAS 🧳", "ATIVOS 🟢", "INATIVOS 🚷"]
         for rank in low_tiers:
             names = ranks_config.get(rank, [])
-            if len(names) > 15:
-                display = names[:15]
-                value = "\n".join([f"• {n}" for n in display]) + f"\n*...e mais {len(names)-15}*"
-            else:
-                value = "\n".join([f"• {n}" for n in names]) if names else "*Vazio*"
             
-            embed.add_field(name=f"{rank}", value=value, inline=True)
+            if names:
+                # Formata como: `Nome`, `Nome2`, `Nome3`
+                # Isso cria um bloco de texto fluido que ocupa menos altura
+                formatted_names = [f"`{n}`" for n in names]
+                value = ", ".join(formatted_names)
+                
+                # Se ficar MUITO grande (limite do discord é 1024 chars), corta
+                if len(value) > 1000:
+                    value = value[:950] + "..."
+            else:
+                value = "*Ninguém*"
+            
+            # Inline=False para ocupar a largura toda e permitir o texto fluir
+            embed.add_field(name=f"{rank} ({len(names)})", value=value, inline=False)
 
         # -- RODAPÉ --
         info_text = (
             "🎙️ **Como subir de Rank?**\n"
-            "Participe das calls em grupo com o áudio aberto (microfone também) e o bot vai logar cada minuto.\n"
-            "Os minutos sozinho na call ou mutado contam apenas como 'Presença', mas não pontuam para o **Master**!"
+            "Participe das calls em grupo com o áudio aberto e o bot vai logar seus minutos. "
+            "Call sozinho ou mutado conta apenas presença!"
         )
         embed.add_field(name="⠀", value=info_text, inline=False)
 
