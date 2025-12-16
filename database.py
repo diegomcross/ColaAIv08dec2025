@@ -72,7 +72,7 @@ async def init_db():
                 PRIMARY KEY (poll_message_id, user_id, vote_option)
             )
         """)
-        # Ciclo de Vida e Presença
+        # Ciclo de Vida e Presença (COM CORREÇÃO DE DUPLICAÇÃO)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS event_lifecycle (
                 event_id INTEGER PRIMARY KEY,
@@ -101,7 +101,7 @@ async def init_db():
             )
         """)
         
-        # Migrações de segurança
+        # Migrações de segurança para colunas novas
         try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_1h_sent BOOLEAN DEFAULT 0")
         except: pass
         
