@@ -8,16 +8,10 @@ class SetupModal(ui.Modal, title="Registro no Clã"):
 
     async def on_submit(self, interaction: discord.Interaction):
         new_nick = self.bungie_id.value
-        # Tenta renomear
         try:
-            # Remove a tag #1234 se quiser deixar só o nome, ou mantém tudo.
-            # O pedido foi "dar match", então usaremos o nome completo ou simplificado.
-            # Vamos simplificar visualmente removendo números se preferir, ou manter full.
-            # Vou manter full para ser exato.
-            await interaction.user.edit(nick=new_nick[:32]) # Limite discord 32 chars
+            await interaction.user.edit(nick=new_nick[:32])
             await interaction.response.send_message(f"✅ Nome alterado para **{new_nick}**!", ephemeral=True)
             
-            # Envia a próxima etapa (Termo de Voz)
             view = VoiceAgreementView()
             await interaction.user.send("Quase lá! Para manter a ordem no clã, precisamos que concorde com uma regra simples:", view=view)
             
@@ -34,7 +28,6 @@ class VoiceAgreementView(ui.View):
     async def agree(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.edit_message(content="✅ **Termo aceito!** Bem-vindo oficialmente ao esquadrão.", view=None)
         
-        # Envia Tutorial Final
         embed = discord.Embed(title="📚 Guia Rápido do ColaAI", color=discord.Color.purple())
         embed.add_field(name="📅 Agendar Jogos", value="Use `/agendar` em qualquer canal de texto para criar uma Raid ou atividade.", inline=False)
         embed.add_field(name="📊 Enquetes", value="Use `/enquete_atividade` para decidir o que jogar ou `/enquete_quando` para decidir a hora.", inline=False)
@@ -57,20 +50,20 @@ class WelcomeCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        """Dispara quando alguém entra no servidor."""
         try:
             embed = discord.Embed(
                 title=f"Bem-vindo(a) ao Clã, {member.name}!",
                 description="Antes de começar, precisamos configurar seu perfil para bater com o jogo.",
                 color=discord.Color.gold()
             )
-            embed.add_field(name="🔗 Link do Clã na Bungie", value="[Clique aqui para solicitar entrada no Clã](https://www.bungie.net/en/ClanV2?groupid=SEU_ID_AQUI)", inline=False)
+            # Substitua LINK_DA_BUNGIE pelo link real do seu clã se quiser
+            embed.add_field(name="🔗 Link do Clã na Bungie", value="[Clique aqui para solicitar entrada no Clã](https://www.bungie.net)", inline=False)
             embed.set_footer(text="Clique abaixo para configurar seu nome.")
             
             await member.send(embed=embed, view=SetupView())
             
         except discord.Forbidden:
-            print(f"[WELCOME] Não consegui enviar DM para {member.name} (Privacidade fechada).")
+            print(f"[WELCOME] Não consegui enviar DM para {member.name}.")
 
 async def setup(bot):
     await bot.add_cog(WelcomeCog(bot))
