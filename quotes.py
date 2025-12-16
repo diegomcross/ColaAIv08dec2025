@@ -1,14 +1,11 @@
 # quotes.py
 
 # ==============================================================================
-# 🌞 MANHÃ: HUMOR DE GAMEPLAY (100 Frases - Estilo ColaAI)
+# 🌞 MANHÃ: HUMOR DE GAMEPLAY
 # ==============================================================================
 MORNING_QUOTES = [
-    # --- NOVAS ADIÇÕES (PEDIDOS ESPECÍFICOS) ---
     "A conquista Mestre da Avalon não foi uma missão, foi um massacre. Centenas de wipes, traumas profundos e Guardiões questionando sua própria existência. Respeito aos sobreviventes.",
     "Raid Épica? Você nem conseguiu fazer a raid normal sem wipar! Se enxerga, Guardião.",
-    
-    # --- FRASES DE GAMEPLAY (FILTRADAS) ---
     "Dizem que usar tonalizador preto ou vermelho aumenta o DPS em 5%. Não sou eu que inventei as regras, é a ciência do jogo.",
     "Atenção: Um Guardião bonito bate mais forte. Se você está morrendo muito, talvez seja hora de visitar a Ada-1 e repensar esse look.",
     "O Mestre Rahool me contou um segredo: o God Roll que você quer cai hoje... pro seu amigo que instalou o jogo ontem.",
@@ -112,7 +109,83 @@ MORNING_QUOTES = [
     "Aquele baú secreto que você perdeu tinha um item azul. Não chore.",
     "O universo é vasto, mas a sua zona de conforto é o respawn.",
     "Você joga Destiny 2 ou 'Simulador de Inventário'?",
-    "Seus inimigos têm barra de vida. Você tem barra de paciência. A sua acaba primeiro."
+    "Seus inimigos têm barra de vida. Você tem barra de paciência. A sua acaba primeiro.",
+    "Analisei seu histórico de partidas. Se vergonha matasse, seu Fantasma estaria sobrecarregado agora.",
+    "O Drifter perguntou se você quer jogar Gambit. Eu disse que você estava ocupado demais errando tiros na Patrulha.",
+    "Sabe o que brilha mais que o seu loot? A sua total falta de noção de posicionamento no mapa.",
+    "Protocolo de motivação... falha. Causa: Seu K/D vergonhoso no Crisol ontem.",
+    "Você chama isso de nave? Parece uma lata de lixo voadora que o Spider rejeitaria.",
+    "O Mestre Rahool me ligou. Ele disse que tem um Engrama Azul com seu nome. É o que você merece.",
+    "Eu vi Fantasmas ressuscitarem Guardiões lendários. O meu ressuscitou... você. A vida é injusta.",
+    "Chega de papo furado. Se você morrer hoje caindo do mapa, eu juro que demoro 30 segundos pra te reviver. De propósito.",
+    "O Drifter é um canalha, mas pelo menos ele tem estilo. Você se veste como se tivesse caído no guarda-roupa do Zavala no escuro.",
+    "'Oh, eu sou o escolhido'. Não, você é só o único que apareceu pro trabalho. Não se iluda.",
+    "Sabe o que a sua Build e um queijo suíço têm em comum? Ambos são cheios de buracos.",
+    "A Luz te dá imortalidade apenas para que você possa errar o pulo na Raid infinitas vezes. Que desperdício de energia cósmica.",
+    "Se a Lógica da Espada da Colmeia fosse aplicada neste clã, você já teria virado um cristal decorativo na estante da Savathûn há muito tempo.",
+    "Não se preocupe com o inimigo. A sua forma atual de jogar já é trágica o suficiente para eles desistirem por pena.",
+    "Você farma, farma e farma. Para quê? Para guardar a arma no cofre e continuar usando a mesma exótica de 4 anos atrás. Insanidade.",
+    "Detectando níveis críticos de incompetência. Ah, é só você logando no servidor.",
+    "A Treva te olha e ri. A Luz te olha e suspira de decepção.",
+    "Você luta como um Eliksni recém-nascido que bebeu muito éter.",
+    "Até um Dreg tem um plano melhor que o seu. E ele só tem uma pistola.",
+    "Vai farmar ou vai ficar aí na Torre dançando e ocupando espaço no servidor?",
+    "Desligando protocolo de simpatia. Vá trabalhar e pare de chorar.",
+    "Espero que seu RNG hoje seja tão ruim quanto a sua pontaria.",
+    "Você não é um Guardião, é um peso morto flutuante que eu tenho que arrastar por aí.",
+    "Se eu ganhasse um Lúmen para cada vez que você morre de forma estúpida, eu compraria a Última Cidade.",
+    "O Zavala é careca de tanto estresse que você causa nele.",
+    "Sua mira é tão ruim que os inimigos estão começando a desviar *para* a frente das suas balas por pena.",
+    "Você não tem 'azar' no drop. O jogo só sabe que você não vai usar o item direito mesmo.",
+    "Sugestão tática: Tente atirar nos inimigos, não nas paredes.",
+    "O Viajante deve ter se arrependido quando viu seu relatório de combate.",
+    "Você é o motivo pelo qual os alienígenas acham que somos idiotas.",
+    "Bom dia, Capitão! As chances de sobrevivência hoje são de 12%... divirta-se morrendo.",
+    "Olá! Detecto altos níveis de otimismo. Vou corrigir isso mostrando suas estatísticas de morte humilhantes.",
+    "Capitão, o dia está lindo! Perfeito para um massacre não autorizado e falhas críticas.",
+    "Saudações! Todos os meus amigos estão mortos. Você será o próximo se continuar jogando assim.",
+    "Feliz em vê-lo! Meus sensores indicam que você vai falhar miseravelmente na próxima missão.",
+    "Bom dia! A entropia é inevitável. Seu café vai esfriar e seu loot será lixo.",
+    "Capitão, você é o melhor! Entre as opções medíocres e incompetentes disponíveis na nave.",
+    "Sistemas operacionais! Diferente da sua capacidade cognitiva hoje, que parece desligada.",
+    "Vamos explorar! Provavelmente vamos encontrar apenas dor, sofrimento e bugs visuais.",
+    "Oi! Estou presa nesta carcaça há séculos e você reclama de acordar cedo para jogar?"
+]
+
+# ==============================================================================
+# 🌟 FRASES INSPIRACIONAIS DESTINY 2 (Para o Mestre da Semana)
+# ==============================================================================
+DESTINY_INSPIRATIONAL_QUOTES = [
+    "A bravura inspira a bravura. — O Orador",
+    "A Luz vive em todos os lugares, em todas as coisas. Você pode bloqueá-la, até tentar prendê-la, mas a Luz sempre encontrará o seu caminho. — O Orador",
+    "Guardiões fazem seu próprio destino. — Lorde Shaxx",
+    "Devoção inspira bravura, bravura inspira sacrifício, sacrifício leva à morte. — O Orador",
+    "Olhos para cima, Guardião. — Cayde-6",
+    "Não importa o quanto somos poderosos, somos sempre mais fortes juntos. — Zavala",
+    "Nós não somos um exército. Não somos conquistadores. Nós somos Guardiões. — Zavala",
+    "O universo é definido pelo que você deixa para trás. — Eris Morn",
+    "A única coisa que temos que temer é a nós mesmos. — Osiris",
+    "Lute para sempre, Guardião! — Lorde Shaxx",
+    "Nós andamos na Luz, mas sempre haverá sombras. — Ikora Rey",
+    "A esperança é a moeda mais forte da Torre. — Cayde-6",
+    "Se você não pode proteger o que tem, você não merece ter. — Saint-14",
+    "A vitória é forjada no fogo do combate. — Lorde Saladino",
+    "Não subestime a Escuridão, mas nunca tema a Luz. — Ikora Rey",
+    "Você é a arma do Viajante. Use-se bem. — Zavala",
+    "A morte é apenas um recomeço para nós. — Fantasma",
+    "Nós caímos para que possamos aprender a nos levantar. — Saint-14",
+    "A verdadeira força não vem do poder, mas da vontade de usá-lo para o bem. — Lorde Saladino",
+    "Onde há Luz, há esperança. — O Orador",
+    "Nunca desista. Nunca se renda. — Lorde Shaxx",
+    "Seu legado será escrito nas estrelas. — Imperatriz Caiatl",
+    "A Luz nos dá poder, mas é a nossa humanidade que nos guia. — Zavala",
+    "O destino não é um caminho traçado, é o caminho que escolhemos. — A Estranha",
+    "Somos a espada na escuridão. — Saint-14",
+    "A cada queda, nos levantamos mais fortes. — Osiris",
+    "A coragem não é a ausência de medo, mas a ação apesar dele. — Ikora Rey",
+    "Proteja a Última Cidade, custe o que custar. — Zavala",
+    "Você é a esperança da humanidade. — O Orador",
+    "Que a Luz guie seu caminho. — Fantasma"
 ]
 
 # ==============================================================================
