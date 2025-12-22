@@ -188,15 +188,14 @@ class WelcomeCog(commands.Cog):
         guild = member.guild
         category = guild.get_channel(config.CATEGORY_WELCOME_ID)
         
-        # Se não tiver categoria configurada, tenta criar no topo ou avisa erro
+        # Se não tiver categoria configurada, tenta criar no topo
         if not category:
-            print("[WELCOME] ERRO: CATEGORY_WELCOME_ID inválido ou não encontrado.")
-            return
-
-        # Define permissões: Apenas bot e membro veem
+            print("[WELCOME] AVISO: CATEGORY_WELCOME_ID não encontrado. Criando no topo.")
+        
+        # FIX: read_message_history=True garante que ele veja a msg mesmo se lagar
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            member: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         }
 
@@ -206,6 +205,9 @@ class WelcomeCog(commands.Cog):
 
         try:
             channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=overwrites)
+            
+            # Delay de segurança para o Discord propagar permissões
+            await asyncio.sleep(2)
             
             embed = discord.Embed(
                 title=f"Olá, {member.name}!",
@@ -232,22 +234,15 @@ class WelcomeCog(commands.Cog):
         
         for channel in category.text_channels:
             if channel.name.startswith("👋│boas-vindas-"):
-                # Verifica a idade do canal (baseado na última mensagem ou criação)
                 try:
-                    # Se não tiver mensagens, usa created_at
                     last_msg_time = channel.created_at
-                    
-                    # Tenta pegar última msg para ver se está ativo
                     async for msg in channel.history(limit=1):
                         last_msg_time = msg.created_at
                     
                     diff = (now - last_msg_time).total_seconds()
                     
-                    # 24 Horas = 86400 segundos
-                    if diff > 86400:
+                    if diff > 86400: # 24h
                         await channel.delete(reason="Canal de Boas-vindas abandonado")
-                        # Opcional: Kickar o membro que não completou? 
-                        # Para segurança, apenas deletamos o canal. O membro fica "no limbo" sem cargos.
                 except:
                     continue
 
