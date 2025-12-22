@@ -19,7 +19,7 @@ CATEGORY_EVENTS_ID = 1357809570298331295
 
 # Links
 BUNGIE_CLAN_LINK = "https://www.bungie.net/en/ClanV2?groupid=5336295"
-DISCORD_INVITE_LINK = "https://discord.gg/SEU_LINK_AQUI" 
+DISCORD_INVITE_LINK = "https://discord.gg/kspvTzNuuA" 
 
 # --- CONFIGURAÇÃO DE CARGOS E HIERARQUIA ---
 
