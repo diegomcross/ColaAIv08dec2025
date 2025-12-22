@@ -19,15 +19,12 @@ class PollView(discord.ui.View):
         user_id = interaction.user.id
         message_id = interaction.message.id
         
-        # 1. Lógica de Toggle (Votos Múltiplos)
         has_voted = await db.check_user_vote_on_option(message_id, user_id, option)
-        
         if has_voted:
             await db.remove_poll_vote_option(message_id, user_id, option)
         else:
             await db.add_poll_vote(message_id, user_id, option)
         
-        # 2. Reconstruir Embed
         votes = await db.get_poll_voters_detailed(message_id)
         
         vote_map = {}
@@ -64,7 +61,6 @@ class PollView(discord.ui.View):
         embed.description = base_desc + "\n".join(new_desc_lines)
         await interaction.message.edit(embed=embed)
         
-        # 3. Disparar criação se venceu
         if winner_option:
             await self.trigger_event_creation(interaction, winner_option)
 
@@ -132,11 +128,8 @@ class PollView(discord.ui.View):
         
         await interaction.channel.send(f"🎉 Evento criado em {channel.mention} com {len(winning_voters)} confirmados!")
         
-        # --- APAGAR ENQUETE CONCLUÍDA ---
-        try:
-            await interaction.message.delete()
-        except:
-            pass
+        try: await interaction.message.delete()
+        except: pass
 
 class VotingPollView(PollView):
     def __init__(self, bot, poll_type, target_data, options_list):
@@ -145,6 +138,16 @@ class VotingPollView(PollView):
             label = opt.get('label', opt.get('value'))
             value = opt.get('value', label)
             self.add_item(VotingButton(label, value))
+
+    @discord.ui.button(label="🗑️ Apagar", style=discord.ButtonStyle.danger, row=4)
+    async def btn_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Permissão simples: Apenas Admin ou quem criou (mas aqui não temos o criador fácil, então Admin/Mod)
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("❌ Apenas Moderadores podem apagar enquetes.", ephemeral=True)
+            
+        await db.close_poll(interaction.message.id)
+        await interaction.message.delete()
+        await interaction.response.send_message("Enquete apagada.", ephemeral=True)
 
 class VotingButton(discord.ui.Button):
     def __init__(self, label, value):
