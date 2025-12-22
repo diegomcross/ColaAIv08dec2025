@@ -19,6 +19,7 @@ CATEGORY_EVENTS_ID = 1357809570298331295
 
 # Links
 BUNGIE_CLAN_LINK = "https://www.bungie.net/en/ClanV2?groupid=5336295"
+DISCORD_INVITE_LINK = "https://discord.gg/SEU_LINK_AQUI" 
 
 # --- CONFIGURAÇÃO DE CARGOS E HIERARQUIA ---
 
@@ -47,6 +48,13 @@ ROLE_XP_RANK11 = 1385760773732827246
 
 ROLE_VOICE_ACCEPTED = 1378070045757935627
 ROLE_VOICE_REJECTED = 1386520178082320595
+
+# --- NOVO: CONFIGURAÇÃO DE ACESSO ---
+# ID da Categoria onde os canais de boas-vindas serão criados
+CATEGORY_WELCOME_ID = 1449566023408681090 
+
+# Cargo "Membro" que libera acesso ao resto do servidor após o quiz
+ROLE_MEMBER_ID = 1383132199083184249
 
 # Data de Início da "Era da Inatividade"
 INACTIVITY_START_DATE = datetime(2025, 5, 20)
