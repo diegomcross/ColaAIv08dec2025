@@ -7,8 +7,176 @@ import asyncio
 import datetime
 from constants import BR_TIMEZONE
 
-# --- VIEWS DO QUESTIONÁRIO (INTERATIVIDADE) ---
+# --- VIEW: APROVAÇÃO DA STAFF ---
+class StaffApprovalView(ui.View):
+    def __init__(self, bot, app_data, member):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.app_data = app_data
+        self.member = member
 
+    @ui.button(label="✅ Aprovar Membro", style=discord.ButtonStyle.success)
+    async def approve(self, interaction: discord.Interaction, button: ui.Button):
+        # Verificação de segurança: Apenas Mods ou Fundador podem clicar
+        user_roles = [r.id for r in interaction.user.roles]
+        allowed_roles = [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID]
+        
+        if not any(rid in user_roles for rid in allowed_roles) and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("⛔ Apenas Moderadores ou o Fundador podem aprovar.", ephemeral=True)
+
+        await interaction.response.defer()
+        
+        # 1. Aplica Cargos
+        roles_to_add = []
+        guild = interaction.guild
+        
+        member_role = guild.get_role(config.ROLE_MEMBER_ID)
+        if member_role: roles_to_add.append(member_role)
+        
+        voice_role = guild.get_role(config.ROLE_VOICE_ACCEPTED)
+        if voice_role: roles_to_add.append(voice_role)
+        
+        for rid in self.app_data['roles']:
+            r = guild.get_role(rid)
+            if r: roles_to_add.append(r)
+        
+        if roles_to_add:
+            try: await self.member.add_roles(*roles_to_add)
+            except Exception as e: print(f"Erro ao dar cargos: {e}")
+
+        # 2. DM de Aviso ao Usuário
+        try:
+            dm_embed = discord.Embed(title="🚀 Acesso Aprovado!", description="Sua entrada no clã foi aceita pela administração.", color=discord.Color.green())
+            dm_embed.add_field(name="Bem-vindo(a)!", value=f"Agora você tem acesso total ao servidor. Nos vemos em órbita!", inline=False)
+            await self.member.send(embed=dm_embed)
+        except: pass
+
+        # 3. Anúncio no Chat Principal
+        main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
+        if main_chat:
+            await main_chat.send(
+                f"👋 **Olhos para cima, Guardiões!**\n"
+                f"Um novo membro foi aprovado: Seja bem-vindo(a), {self.member.mention}! 🚀\n"
+                f"Identidade: `{self.app_data['bungie_id']}`"
+            )
+
+        # 4. Finalização do Ticket
+        embed_final = discord.Embed(
+            title="✅ Membro Aprovado", 
+            description=f"Aprovado por {interaction.user.mention}.\nO canal será excluído em 5 minutos.", 
+            color=discord.Color.green()
+        )
+        await interaction.channel.send(embed=embed_final)
+        
+        # Desativa os botões
+        button.disabled = True
+        self.children[1].disabled = True
+        await interaction.message.edit(view=self)
+
+        await asyncio.sleep(300)
+        await interaction.channel.delete(reason="Onboarding Aprovado")
+
+    @ui.button(label="⛔ Rejeitar/Expulsar", style=discord.ButtonStyle.danger)
+    async def reject(self, interaction: discord.Interaction, button: ui.Button):
+        user_roles = [r.id for r in interaction.user.roles]
+        allowed_roles = [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID]
+        
+        if not any(rid in user_roles for rid in allowed_roles) and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("⛔ Sem permissão.", ephemeral=True)
+
+        await interaction.response.defer()
+        
+        embed = discord.Embed(title="❌ Solicitação Recusada", description=f"Recusado por {interaction.user.mention}. O usuário será removido.", color=discord.Color.red())
+        await interaction.channel.send(embed=embed)
+        
+        try: 
+            await self.member.send("Sua solicitação para entrar no clã foi recusada pela moderação.")
+            await self.member.kick(reason="Recusado no Onboarding")
+        except: pass
+        
+        await asyncio.sleep(5)
+        await interaction.channel.delete(reason="Onboarding Recusado")
+
+# --- VIEW: CONFIRMAÇÃO DO USUÁRIO ---
+class BungieRequestView(ui.View):
+    def __init__(self, bot, app_data, member):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.app_data = app_data
+        self.member = member
+
+    @ui.button(label="📨 Já enviei a solicitação", style=discord.ButtonStyle.primary)
+    async def confirm_sent(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        
+        # 1. Feedback para o Usuário
+        embed_wait = discord.Embed(
+            title="🔄 Aguardando Aprovação",
+            description="Obrigado! Notifiquei os moderadores.\nAssim que eles confirmarem seu pedido na Bungie, seu acesso será liberado aqui automaticamente.",
+            color=discord.Color.orange()
+        )
+        await interaction.message.edit(embed=embed_wait, view=None)
+
+        # 2. Decodificação do Perfil para a Staff
+        roles_selected = self.app_data['roles']
+        
+        # Estilo
+        estilo_str = "Indefinido"
+        if config.ROLE_SOLO in roles_selected: estilo_str = "👤 Solo (Lobo Solitário)"
+        elif config.ROLE_GRUPO in roles_selected: estilo_str = "👥 Grupo (Prefere Fireteam)"
+        
+        # Frequência/Tempo (Crítico para a Staff)
+        freq_str = "Normal"
+        alert_freq = False
+        if config.ROLE_FREQ_SEM_TEMPO in roles_selected: 
+            freq_str = "⚠️ Sem Tempo (Muito Casual)"
+            alert_freq = True
+        elif config.ROLE_FREQ_RARA in roles_selected:
+            freq_str = "⚠️ Joga Raramente"
+            alert_freq = True
+        
+        # Experiência
+        xp_str = "Normal"
+        if config.ROLE_XP_NOVATO in roles_selected: xp_str = "👶 Novato (New Light)"
+        elif config.ROLE_XP_RANK11 in roles_selected: xp_str = "🔥 Rank 11 (Hardcore)"
+
+        # 3. Monta o Embed da Staff
+        guild = interaction.guild
+        mod_role = guild.get_role(config.ROLE_MOD_ID)
+        founder_role = guild.get_role(config.ROLE_FOUNDER_ID)
+        
+        mentions = []
+        if mod_role: mentions.append(mod_role.mention)
+        if founder_role: mentions.append(founder_role.mention)
+        mentions_str = " ".join(mentions) if mentions else "@Staff"
+
+        embed_staff = discord.Embed(
+            title="🛡️ Nova Solicitação Pendente",
+            description=f"O usuário {self.member.mention} completou o cadastro e aguarda aprovação.",
+            color=discord.Color.blue()
+        )
+        
+        embed_staff.add_field(name="🆔 Bungie ID", value=f"`{self.app_data['bungie_id']}`", inline=True)
+        embed_staff.add_field(name="🔗 Link Rápido", value=f"[Ver na Bungie]({config.BUNGIE_CLAN_LINK})", inline=True)
+        
+        # Separador
+        embed_staff.add_field(name="\u200b", value="**📋 Perfil do Candidato:**", inline=False)
+        
+        embed_staff.add_field(name="Estilo de Jogo", value=estilo_str, inline=True)
+        embed_staff.add_field(name="Disponibilidade", value=freq_str, inline=True)
+        embed_staff.add_field(name="Experiência", value=xp_str, inline=True)
+        
+        # Check de Voz (Sempre positivo se chegou aqui, mas bom reforçar)
+        embed_staff.add_field(name="🎙️ Termo de Voz", value="✅ **Aceitou** (Participação Obrigatória)", inline=False)
+
+        if alert_freq:
+            embed_staff.set_footer(text="⚠️ ATENÇÃO: Este membro marcou que tem pouco tempo para jogar.")
+        else:
+            embed_staff.set_footer(text="Verifique se o pedido está na Bungie antes de aprovar.")
+
+        await interaction.channel.send(content=f"{mentions_str}", embed=embed_staff, view=StaffApprovalView(self.bot, self.app_data, self.member))
+
+# --- VIEW: DECISÃO FINAL (VOZ) ---
 class FinalDecisionView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
@@ -16,97 +184,30 @@ class FinalDecisionView(ui.View):
         self.app_data = app_data
         self.member = member
 
-    async def close_ticket(self, interaction, approved: bool):
-        await interaction.response.defer()
-        
-        if approved:
-            # --- FASE 1: A ISCA (Imediata) ---
-            embed_step = discord.Embed(
-                title="⏳ Quase lá...", 
-                description="**Último passo:** Acesse o link do clã abaixo e faça sua solicitação na Bungie.",
-                color=discord.Color.gold()
-            )
-            embed_step.add_field(name="🔗 Link do Clã (Bungie)", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
-            
-            await interaction.channel.send(embed=embed_step)
-
-            # --- MENSAGEM DE SIMULAÇÃO (Psychological Wait) ---
-            embed_wait = discord.Embed(
-                description="🔄 **Aguardando confirmação...**\nO sistema está verificando se sua solicitação foi enviada para a Bungie. O acesso será liberado automaticamente assim que detectarmos o pedido.",
-                color=discord.Color.light_grey()
-            )
-            await interaction.channel.send(embed=embed_wait)
-
-            # --- FASE 2: TIMER OCULTO (60 Segundos) ---
-            # O bot "finge" que está checando a API da Bungie
-            await asyncio.sleep(60)
-
-            # --- FASE 3: APLICAÇÃO DE CARGOS (Após o delay) ---
-            roles_to_add = []
-            guild = interaction.guild
-            
-            # Cargo Base de Membro
-            member_role = guild.get_role(config.ROLE_MEMBER_ID)
-            if member_role: roles_to_add.append(member_role)
-            
-            # Cargo de Voz Aceito
-            voice_role = guild.get_role(config.ROLE_VOICE_ACCEPTED)
-            if voice_role: roles_to_add.append(voice_role)
-            
-            # Cargos do Quiz
-            for rid in self.app_data['roles']:
-                r = guild.get_role(rid)
-                if r: roles_to_add.append(r)
-            
-            if roles_to_add:
-                try: await self.member.add_roles(*roles_to_add)
-                except Exception as e: print(f"Erro ao dar cargos: {e}")
-
-            # DM de Backup (Garantia)
-            try:
-                dm_embed = discord.Embed(title="🚀 Acesso Liberado!", description="Bem-vindo ao Clã.", color=discord.Color.green())
-                dm_embed.add_field(name="Link da Bungie", value=f"{config.BUNGIE_CLAN_LINK}", inline=False)
-                await self.member.send(embed=dm_embed)
-            except: pass
-
-            # Anúncio no Chat Principal
-            main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
-            if main_chat:
-                await main_chat.send(
-                    f"👋 **Olhos para cima, Guardiões!**\n"
-                    f"Um novo membro pousou na Torre: Seja bem-vindo(a), {self.member.mention}! 🚀\n"
-                    f"Identidade: `{self.app_data['bungie_id']}`"
-                )
-            
-            # --- FASE 4: MENSAGEM FINAL E TIMER DE DELEÇÃO (5 Minutos) ---
-            embed_final = discord.Embed(
-                title="✅ Solicitação Confirmada!", 
-                description="Seus cargos foram aplicados e você já pode ver os canais do servidor.\n\n⚠️ **Este canal será excluído automaticamente em 5 minutos.**", 
-                color=discord.Color.green()
-            )
-            await interaction.channel.send(embed=embed_final)
-            
-            # Espera 5 minutos (300 segundos) antes de limpar
-            await asyncio.sleep(300)
-            await interaction.channel.delete(reason="Onboarding Concluído")
-            
-        else:
-            # Rejeitado (Kick)
-            embed = discord.Embed(title="⛔ Acesso Negado", description="Como a participação em voz é obrigatória, não podemos prosseguir.\nVocê será removido do servidor. Até a próxima!", color=discord.Color.red())
-            await interaction.channel.send(embed=embed)
-            await asyncio.sleep(5)
-            try: await self.member.kick(reason="Recusou regras de voz no onboarding")
-            except: pass
-            await interaction.channel.delete(reason="Onboarding Falhou")
-
     @ui.button(label="Concordo em participar dos canais de voz", style=discord.ButtonStyle.green, emoji="🎙️")
     async def agree(self, interaction: discord.Interaction, button: ui.Button):
-        await self.close_ticket(interaction, approved=True)
+        await interaction.response.defer()
+        
+        embed_step = discord.Embed(
+            title="🔗 Quase lá...", 
+            description="**Passo Final:** Acesse o link do clã abaixo e faça sua solicitação na Bungie.\n\nDepois de enviar, **clique no botão azul** abaixo para avisar a moderação.",
+            color=discord.Color.gold()
+        )
+        embed_step.add_field(name="Link do Clã (Bungie)", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
+        
+        await interaction.message.edit(embed=embed_step, view=BungieRequestView(self.bot, self.app_data, self.member))
 
     @ui.button(label="Não concordo", style=discord.ButtonStyle.red)
     async def disagree(self, interaction: discord.Interaction, button: ui.Button):
-        await self.close_ticket(interaction, approved=False)
+        await interaction.response.defer()
+        embed = discord.Embed(title="⛔ Acesso Negado", description="Participação em voz é obrigatória. Você será removido do servidor.", color=discord.Color.red())
+        await interaction.message.edit(embed=embed, view=None)
+        await asyncio.sleep(5)
+        try: await self.member.kick(reason="Recusou regras de voz")
+        except: pass
+        await interaction.channel.delete()
 
+# --- VIEWS DO QUESTIONÁRIO (ANTERIORES) ---
 class QuestionExperienceView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
@@ -117,7 +218,6 @@ class QuestionExperienceView(ui.View):
     async def next_step(self, interaction, role_id):
         await interaction.response.defer()
         self.app_data['roles'].append(role_id)
-        
         embed = discord.Embed(title="4. Termo de Compromisso", description="Você entende que a participação nos **Canais de Voz** é obrigatória durante as atividades do clã?", color=discord.Color.red())
         await interaction.message.edit(embed=embed, view=FinalDecisionView(self.bot, self.app_data, self.member))
 
@@ -140,7 +240,6 @@ class QuestionFrequencyView(ui.View):
     async def next_step(self, interaction, role_id=None):
         await interaction.response.defer()
         if role_id: self.app_data['roles'].append(role_id)
-        
         embed = discord.Embed(title="3. Nível de Experiência", description="Como você classificaria seu conhecimento no Destiny 2?", color=discord.Color.blue())
         await interaction.message.edit(embed=embed, view=QuestionExperienceView(self.bot, self.app_data, self.member))
 
@@ -165,7 +264,6 @@ class QuestionStyleView(ui.View):
     async def next_step(self, interaction, role_id):
         await interaction.response.defer()
         self.app_data['roles'].append(role_id)
-        
         embed = discord.Embed(title="2. Frequência de Jogo", description="Com que frequência você costuma jogar?", color=discord.Color.blue())
         await interaction.message.edit(embed=embed, view=QuestionFrequencyView(self.bot, self.app_data, self.member))
 
@@ -176,25 +274,15 @@ class QuestionStyleView(ui.View):
 
 class SetupModal(ui.Modal, title="Identificação"):
     bungie_id = ui.TextInput(label="Bungie ID", placeholder="Nome#1234", required=True)
-
     def __init__(self, bot, member):
         super().__init__()
         self.bot = bot
         self.member = member
-
     async def on_submit(self, interaction: discord.Interaction):
-        # Sanitização
-        raw_input = self.bungie_id.value
-        clean_id = re.sub(r'\s*#\s*', '#', raw_input.strip())
-        new_nick = clean_id.split('#')[0]
-
-        # Tenta Renomear
-        try: await self.member.edit(nick=new_nick[:32])
+        clean_id = re.sub(r'\s*#\s*', '#', self.bungie_id.value.strip())
+        try: await self.member.edit(nick=clean_id.split('#')[0][:32])
         except: pass
-
-        # Inicia Dados
         app_data = {'bungie_id': clean_id, 'roles': []}
-
         embed = discord.Embed(title="1. Estilo de Jogo", description="Você costuma jogar mais sozinho ou em grupo?", color=discord.Color.blue())
         await interaction.response.send_message(embed=embed, view=QuestionStyleView(self.bot, app_data, self.member))
 
@@ -203,7 +291,6 @@ class StartOnboardingView(ui.View):
         super().__init__(timeout=None)
         self.bot = bot
         self.member = member
-
     @ui.button(label="📝 Iniciar Registro", style=discord.ButtonStyle.primary, emoji="🚀")
     async def start(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(SetupModal(self.bot, self.member))
@@ -218,67 +305,45 @@ class WelcomeCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        """Cria o canal privado de boas-vindas ao entrar."""
         guild = member.guild
         category = guild.get_channel(config.CATEGORY_WELCOME_ID)
         
-        # Se não tiver categoria configurada, tenta criar no topo
-        if not category:
-            print("[WELCOME] AVISO: CATEGORY_WELCOME_ID não encontrado. Criando no topo.")
+        mod_role = guild.get_role(config.ROLE_MOD_ID)
+        founder_role = guild.get_role(config.ROLE_FOUNDER_ID)
         
-        # FIX: read_message_history=True garante que ele veja a msg mesmo se lagar
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             member: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         }
+        
+        if mod_role: overwrites[mod_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        if founder_role: overwrites[founder_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-        # Nome do canal limpo
         clean_name = re.sub(r'[^a-zA-Z0-9]', '', member.name).lower()
         channel_name = f"👋│boas-vindas-{clean_name}"
 
         try:
             channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=overwrites)
-            
-            # Delay de segurança para o Discord propagar permissões
             await asyncio.sleep(2)
-            
-            embed = discord.Embed(
-                title=f"Olá, {member.name}!",
-                description="Seja bem-vindo(a) à ante-sala do Clã.\n\nPara liberar seu acesso ao restante do servidor, precisamos configurar seu perfil e confirmar algumas regras.\n\n**Clique abaixo para começar.**",
-                color=discord.Color.gold()
-            )
+            embed = discord.Embed(title=f"Olá, {member.name}!", description="Seja bem-vindo(a).\n\nPara entrar no clã, precisamos configurar seu perfil. No final, um Moderador irá aprovar seu acesso.\n\n**Clique abaixo para começar.**", color=discord.Color.gold())
             embed.set_thumbnail(url=member.display_avatar.url)
-            
             await channel.send(f"{member.mention}", embed=embed, view=StartOnboardingView(self.bot, member))
-            
         except Exception as e:
-            print(f"[WELCOME] Erro ao criar canal para {member.name}: {e}")
+            print(f"[WELCOME] Erro: {e}")
 
-    # --- TAREFA DE LIMPEZA (GHOST CHANNELS) ---
     @tasks.loop(hours=1)
     async def cleanup_channels_loop(self):
-        """Remove canais de boas-vindas abandonados há mais de 24h."""
-        await self.bot.wait_until_ready()
-        
         category = self.bot.get_channel(config.CATEGORY_WELCOME_ID)
         if not category: return
-
         now = datetime.datetime.now(datetime.timezone.utc)
-        
         for channel in category.text_channels:
             if channel.name.startswith("👋│boas-vindas-"):
                 try:
                     last_msg_time = channel.created_at
-                    async for msg in channel.history(limit=1):
-                        last_msg_time = msg.created_at
-                    
-                    diff = (now - last_msg_time).total_seconds()
-                    
-                    if diff > 86400: # 24h
-                        await channel.delete(reason="Canal de Boas-vindas abandonado")
-                except:
-                    continue
+                    async for msg in channel.history(limit=1): last_msg_time = msg.created_at
+                    if (now - last_msg_time).total_seconds() > 86400: await channel.delete()
+                except: continue
 
 async def setup(bot):
     await bot.add_cog(WelcomeCog(bot))
