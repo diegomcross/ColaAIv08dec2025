@@ -1,6 +1,5 @@
 import aiosqlite
 import datetime
-import json
 from constants import BR_TIMEZONE
 
 DB_NAME = "clan_bot.db"
@@ -73,14 +72,16 @@ async def init_db():
                 PRIMARY KEY (poll_message_id, user_id, vote_option)
             )
         """)
-        # Ciclo de Vida e Presença
+        # Ciclo de Vida e Presença (COM CORREÇÃO DE DUPLICAÇÃO)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS event_lifecycle (
                 event_id INTEGER PRIMARY KEY,
                 maybe_alert_sent BOOLEAN DEFAULT 0,
                 start_alert_sent BOOLEAN DEFAULT 0,
                 late_report_sent BOOLEAN DEFAULT 0,
-                reminder_1h_sent BOOLEAN DEFAULT 0
+                reminder_1h_sent BOOLEAN DEFAULT 0,
+                reminder_4h_sent BOOLEAN DEFAULT 0,
+                reminder_24h_sent BOOLEAN DEFAULT 0
             )
         """)
         await db.execute("""
@@ -92,7 +93,8 @@ async def init_db():
                 PRIMARY KEY (event_id, user_id)
             )
         """)
-        # Histórico de Mestres
+        
+        # --- NOVA TABELA: HISTÓRICO DE MESTRES (Para cooldown de 3 semanas) ---
         await db.execute("""
             CREATE TABLE IF NOT EXISTS master_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,22 +113,26 @@ async def init_db():
             )
         """)
         
-        # Migrações
+        # Migrações de segurança para colunas novas (Adiciona se não existir)
         try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_1h_sent BOOLEAN DEFAULT 0")
+        except: pass
+        try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_4h_sent BOOLEAN DEFAULT 0")
+        except: pass
+        try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_24h_sent BOOLEAN DEFAULT 0")
         except: pass
         
         await db.commit()
 
-# --- FUNÇÕES DE ONBOARDING (NOVO) ---
+# --- FUNÇÕES DE ONBOARDING ---
 async def save_pending_join(user_id, bungie_id, roles_list):
-    """Salva os dados do usuário que passou no questionário mas ainda não entrou."""
+    import json
     roles_json = json.dumps(roles_list)
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR REPLACE INTO pending_joins (user_id, bungie_id, roles_json) VALUES (?, ?, ?)", (user_id, bungie_id, roles_json))
         await db.commit()
 
 async def get_pending_join(user_id):
-    """Recupera dados de um usuário pendente."""
+    import json
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM pending_joins WHERE user_id = ?", (user_id,)) as cursor:
@@ -139,40 +145,52 @@ async def get_pending_join(user_id):
             return None
 
 async def remove_pending_join(user_id):
-    """Remove da lista de pendentes após entrar."""
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM pending_joins WHERE user_id = ?", (user_id,))
         await db.commit()
 
-# --- FUNÇÕES EXISTENTES (MANTIDAS) ---
+# --- FUNÇÕES NOVAS (MESTRE E ESTATÍSTICAS) ---
+
 async def log_master_winner(user_id):
+    """Registra quem ganhou o Mestre da Semana."""
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT INTO master_history (user_id) VALUES (?)", (user_id,))
         await db.commit()
 
 async def get_recent_masters(weeks=3):
+    """Retorna lista de IDs que foram Mestre nas últimas X semanas."""
     limit_date = datetime.datetime.now() - datetime.timedelta(weeks=weeks)
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT user_id FROM master_history WHERE date_won > ?", (limit_date,)) as cursor:
-            return [r['user_id'] for r in await cursor.fetchall()]
+            rows = await cursor.fetchall()
+            return [r['user_id'] for r in rows]
 
 async def get_event_stats_7d():
+    """Retorna estatísticas de eventos dos últimos 7 dias para o resumo semanal."""
     limit_date = datetime.datetime.now() - datetime.timedelta(days=7)
     stats = {}
+    
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
+        
+        # Quem criou mais eventos
         async with db.execute("SELECT creator_id, COUNT(*) as count FROM events WHERE date_time > ? GROUP BY creator_id", (limit_date,)) as cursor:
             async for row in cursor:
                 uid = row['creator_id']
                 if uid not in stats: stats[uid] = {'created': 0, 'participated': 0}
                 stats[uid]['created'] = row['count']
+        
+        # Quem participou mais (attendance = present)
         async with db.execute("SELECT user_id, COUNT(*) as count FROM event_attendance WHERE first_seen_at > ? AND status='present' GROUP BY user_id", (limit_date,)) as cursor:
             async for row in cursor:
                 uid = row['user_id']
                 if uid not in stats: stats[uid] = {'created': 0, 'participated': 0}
                 stats[uid]['participated'] = row['count']
+                
     return stats
+
+# --- FUNÇÕES DE MANUTENÇÃO E ANÁLISE ---
 
 async def prune_old_voice_data(days=90):
     limit_date = datetime.datetime.now() - datetime.timedelta(days=days)
@@ -184,7 +202,11 @@ async def get_sessions_in_range(user_id, days_back):
     limit_date = datetime.datetime.now() - datetime.timedelta(days=days_back)
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT start_time, duration_minutes, is_valid FROM voice_sessions WHERE user_id = ? AND start_time > ?", (user_id, limit_date)) as cursor:
+        async with db.execute("""
+            SELECT start_time, duration_minutes, is_valid 
+            FROM voice_sessions 
+            WHERE user_id = ? AND start_time > ?
+        """, (user_id, limit_date)) as cursor:
             return await cursor.fetchall()
 
 async def get_last_activity_timestamp(user_id):
@@ -192,27 +214,28 @@ async def get_last_activity_timestamp(user_id):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT MAX(start_time) as last_voice FROM voice_sessions WHERE user_id = ?", (user_id,)) as c:
             voice_row = await c.fetchone()
+            last_voice = voice_row['last_voice'] if voice_row and voice_row['last_voice'] else None
+
         async with db.execute("SELECT MAX(first_seen_at) as last_event FROM event_attendance WHERE user_id = ?", (user_id,)) as c:
             event_row = await c.fetchone()
-        
-        lv = voice_row['last_voice'] if voice_row else None
-        le = event_row['last_event'] if event_row else None
-        
-        if not lv and not le: return None
-        if not lv: return le
-        if not le: return lv
+            last_event = event_row['last_event'] if event_row and event_row['last_event'] else None
+
+        if not last_voice and not last_event: return None
+        if not last_voice: return last_event
+        if not last_event: return last_voice
         
         try:
-            lv_dt = datetime.datetime.fromisoformat(str(lv)) if isinstance(lv, str) else lv
-            le_dt = datetime.datetime.fromisoformat(str(le)) if isinstance(le, str) else le
+            lv_dt = datetime.datetime.fromisoformat(str(last_voice)) if isinstance(last_voice, str) else last_voice
+            le_dt = datetime.datetime.fromisoformat(str(last_event)) if isinstance(last_event, str) else last_event
             if lv_dt.tzinfo is None: lv_dt = lv_dt.replace(tzinfo=None)
             if le_dt.tzinfo is None: le_dt = le_dt.replace(tzinfo=None)
             return max(lv_dt, le_dt)
-        except: return lv
+        except: return last_voice
 
+# --- FUNÇÕES DE EVENTOS (PADRÃO) ---
 async def create_event(data):
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("INSERT INTO events (guild_id, channel_id, message_id, role_id, title, description, activity_type, date_time, max_slots, creator_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (data['guild_id'], data['channel_id'], data['message_id'], data['role_id'], data['title'], data['desc'], data['type'], data['date'], data['slots'], data['creator']))
+        cursor = await db.execute("""INSERT INTO events (guild_id, channel_id, message_id, role_id, title, description, activity_type, date_time, max_slots, creator_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (data['guild_id'], data['channel_id'], data['message_id'], data['role_id'], data['title'], data['desc'], data['type'], data['date'], data['slots'], data['creator']))
         await db.commit()
         return cursor.lastrowid
 async def get_event(event_id):
@@ -301,7 +324,7 @@ async def set_lifecycle_flag(event_id, flag_name, value=1):
         await db.execute("INSERT OR IGNORE INTO event_lifecycle (event_id) VALUES (?)", (event_id,)); query = f"UPDATE event_lifecycle SET {flag_name} = ? WHERE event_id = ?"; await db.execute(query, (value, event_id)); await db.commit()
 async def reset_event_lifecycle_flags(event_id):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE event_lifecycle SET maybe_alert_sent = 0, start_alert_sent = 0, late_report_sent = 0, reminder_1h_sent = 0 WHERE event_id = ?", (event_id,)); await db.commit()
+        await db.execute("UPDATE event_lifecycle SET maybe_alert_sent = 0, start_alert_sent = 0, late_report_sent = 0, reminder_1h_sent = 0, reminder_4h_sent = 0, reminder_24h_sent = 0 WHERE event_id = ?", (event_id,)); await db.commit()
 async def mark_attendance_present(event_id, user_id):
     now = datetime.datetime.now()
     async with aiosqlite.connect(DB_NAME) as db:
