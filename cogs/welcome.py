@@ -317,19 +317,52 @@ class WelcomeCog(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def cleanup_channels_loop(self):
-        # FIX: Roda a cada 5 mins e deleta se tiver > 30 mins
         category = self.bot.get_channel(config.CATEGORY_WELCOME_ID)
         if not category: return
         now = datetime.datetime.now(datetime.timezone.utc)
+        
         for channel in category.text_channels:
             if channel.name.startswith("👋│boas-vindas-"):
                 try:
                     last_msg_time = channel.created_at
                     async for msg in channel.history(limit=1): last_msg_time = msg.created_at
-                    # 30 minutos = 1800 segundos
-                    if (now - last_msg_time).total_seconds() > 1800: 
+                    
+                    # 1 Hora = 3600 segundos
+                    if (now - last_msg_time).total_seconds() > 3600:
+                        
+                        target_member = None
+                        # Tenta achar o membro nas permissões do canal
+                        for target in channel.overwrites:
+                            if isinstance(target, discord.Member) and not target.bot:
+                                target_member = target
+                                break
+                        
+                        if target_member:
+                            # Se o membro JÁ TEM o cargo de acesso, ele foi aprovado mas o canal bugou
+                            # Nesse caso, só deletamos o canal.
+                            member_role = channel.guild.get_role(config.ROLE_MEMBER_ID)
+                            is_approved = member_role in target_member.roles if member_role else False
+
+                            if not is_approved:
+                                # Membro NÃO aprovado e estourou o tempo -> KICK
+                                try:
+                                    embed_kick = discord.Embed(
+                                        title="⏳ Tempo Esgotado",
+                                        description="Você foi removido do servidor por inatividade durante o processo de registro.\n\nSe quiser tentar novamente, entre pelo link abaixo:",
+                                        color=discord.Color.red()
+                                    )
+                                    embed_kick.add_field(name="🔗 Link do Discord", value=config.DISCORD_INVITE_LINK)
+                                    await target_member.send(embed=embed_kick)
+                                except: pass
+                                
+                                try:
+                                    await target_member.kick(reason="Timeout Onboarding (1h)")
+                                except: pass
+
                         await channel.delete(reason="Canal de Boas-vindas expirado")
-                except: continue
+                        
+                except Exception as e:
+                    print(f"[WELCOME CLEANUP] Erro no canal {channel.name}: {e}")
 
 async def setup(bot):
     await bot.add_cog(WelcomeCog(bot))
