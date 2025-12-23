@@ -21,20 +21,25 @@ class FinalDecisionView(ui.View):
         
         if approved:
             # --- FASE 1: A ISCA (Imediata) ---
-            # O usuário recebe isso e acha que precisa clicar para o processo andar
             embed_step = discord.Embed(
                 title="⏳ Quase lá...", 
-                description="**Último passo:** Acesse o link do clã abaixo e faça sua solicitação para ter seu acesso liberado.",
+                description="**Último passo:** Acesse o link do clã abaixo e faça sua solicitação na Bungie.",
                 color=discord.Color.gold()
             )
             embed_step.add_field(name="🔗 Link do Clã (Bungie)", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
-            embed_step.set_footer(text="Aguardando sincronização... (Isso pode levar alguns segundos)")
             
             await interaction.channel.send(embed=embed_step)
 
-            # --- FASE 2: TIMER OCULTO (40 Segundos) ---
-            # O bot "finge" que está esperando ou processando, forçando o usuário a ir no link
-            await asyncio.sleep(40)
+            # --- MENSAGEM DE SIMULAÇÃO (Psychological Wait) ---
+            embed_wait = discord.Embed(
+                description="🔄 **Aguardando confirmação...**\nO sistema está verificando se sua solicitação foi enviada para a Bungie. O acesso será liberado automaticamente assim que detectarmos o pedido.",
+                color=discord.Color.light_grey()
+            )
+            await interaction.channel.send(embed=embed_wait)
+
+            # --- FASE 2: TIMER OCULTO (60 Segundos) ---
+            # O bot "finge" que está checando a API da Bungie
+            await asyncio.sleep(60)
 
             # --- FASE 3: APLICAÇÃO DE CARGOS (Após o delay) ---
             roles_to_add = []
@@ -75,7 +80,7 @@ class FinalDecisionView(ui.View):
             
             # --- FASE 4: MENSAGEM FINAL E TIMER DE DELEÇÃO (5 Minutos) ---
             embed_final = discord.Embed(
-                title="✅ Acesso Confirmado!", 
+                title="✅ Solicitação Confirmada!", 
                 description="Seus cargos foram aplicados e você já pode ver os canais do servidor.\n\n⚠️ **Este canal será excluído automaticamente em 5 minutos.**", 
                 color=discord.Color.green()
             )
