@@ -17,7 +17,6 @@ class StaffApprovalView(ui.View):
 
     @ui.button(label="✅ Aprovar Membro", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: ui.Button):
-        # Verificação de segurança: Apenas Mods ou Fundador podem clicar
         user_roles = [r.id for r in interaction.user.roles]
         allowed_roles = [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID]
         
@@ -26,7 +25,6 @@ class StaffApprovalView(ui.View):
 
         await interaction.response.defer()
         
-        # 1. Aplica Cargos
         roles_to_add = []
         guild = interaction.guild
         
@@ -44,14 +42,12 @@ class StaffApprovalView(ui.View):
             try: await self.member.add_roles(*roles_to_add)
             except Exception as e: print(f"Erro ao dar cargos: {e}")
 
-        # 2. DM de Aviso ao Usuário
         try:
             dm_embed = discord.Embed(title="🚀 Acesso Aprovado!", description="Sua entrada no clã foi aceita pela administração.", color=discord.Color.green())
             dm_embed.add_field(name="Bem-vindo(a)!", value=f"Agora você tem acesso total ao servidor. Nos vemos em órbita!", inline=False)
             await self.member.send(embed=dm_embed)
         except: pass
 
-        # 3. Anúncio no Chat Principal
         main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
         if main_chat:
             await main_chat.send(
@@ -60,7 +56,6 @@ class StaffApprovalView(ui.View):
                 f"Identidade: `{self.app_data['bungie_id']}`"
             )
 
-        # 4. Finalização do Ticket
         embed_final = discord.Embed(
             title="✅ Membro Aprovado", 
             description=f"Aprovado por {interaction.user.mention}.\nO canal será excluído em 5 minutos.", 
@@ -68,7 +63,6 @@ class StaffApprovalView(ui.View):
         )
         await interaction.channel.send(embed=embed_final)
         
-        # Desativa os botões
         button.disabled = True
         self.children[1].disabled = True
         await interaction.message.edit(view=self)
@@ -109,7 +103,6 @@ class BungieRequestView(ui.View):
     async def confirm_sent(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         
-        # 1. Feedback para o Usuário
         embed_wait = discord.Embed(
             title="🔄 Aguardando Aprovação",
             description="Obrigado! Notifiquei os moderadores.\nAssim que eles confirmarem seu pedido na Bungie, seu acesso será liberado aqui automaticamente.",
@@ -117,15 +110,12 @@ class BungieRequestView(ui.View):
         )
         await interaction.message.edit(embed=embed_wait, view=None)
 
-        # 2. Decodificação do Perfil para a Staff
         roles_selected = self.app_data['roles']
         
-        # Estilo
         estilo_str = "Indefinido"
         if config.ROLE_SOLO in roles_selected: estilo_str = "👤 Solo (Lobo Solitário)"
         elif config.ROLE_GRUPO in roles_selected: estilo_str = "👥 Grupo (Prefere Fireteam)"
         
-        # Frequência/Tempo (Crítico para a Staff)
         freq_str = "Normal"
         alert_freq = False
         if config.ROLE_FREQ_SEM_TEMPO in roles_selected: 
@@ -135,12 +125,10 @@ class BungieRequestView(ui.View):
             freq_str = "⚠️ Joga Raramente"
             alert_freq = True
         
-        # Experiência
         xp_str = "Normal"
         if config.ROLE_XP_NOVATO in roles_selected: xp_str = "👶 Novato (New Light)"
         elif config.ROLE_XP_RANK11 in roles_selected: xp_str = "🔥 Rank 11 (Hardcore)"
 
-        # 3. Monta o Embed da Staff
         guild = interaction.guild
         mod_role = guild.get_role(config.ROLE_MOD_ID)
         founder_role = guild.get_role(config.ROLE_FOUNDER_ID)
@@ -159,14 +147,11 @@ class BungieRequestView(ui.View):
         embed_staff.add_field(name="🆔 Bungie ID", value=f"`{self.app_data['bungie_id']}`", inline=True)
         embed_staff.add_field(name="🔗 Link Rápido", value=f"[Ver na Bungie]({config.BUNGIE_CLAN_LINK})", inline=True)
         
-        # Separador
         embed_staff.add_field(name="\u200b", value="**📋 Perfil do Candidato:**", inline=False)
-        
         embed_staff.add_field(name="Estilo de Jogo", value=estilo_str, inline=True)
         embed_staff.add_field(name="Disponibilidade", value=freq_str, inline=True)
         embed_staff.add_field(name="Experiência", value=xp_str, inline=True)
         
-        # Check de Voz (Sempre positivo se chegou aqui, mas bom reforçar)
         embed_staff.add_field(name="🎙️ Termo de Voz", value="✅ **Aceitou** (Participação Obrigatória)", inline=False)
 
         if alert_freq:
@@ -176,7 +161,6 @@ class BungieRequestView(ui.View):
 
         await interaction.channel.send(content=f"{mentions_str}", embed=embed_staff, view=StaffApprovalView(self.bot, self.app_data, self.member))
 
-# --- VIEW: DECISÃO FINAL (VOZ) ---
 class FinalDecisionView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
@@ -207,7 +191,6 @@ class FinalDecisionView(ui.View):
         except: pass
         await interaction.channel.delete()
 
-# --- VIEWS DO QUESTIONÁRIO (ANTERIORES) ---
 class QuestionExperienceView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
@@ -332,8 +315,9 @@ class WelcomeCog(commands.Cog):
         except Exception as e:
             print(f"[WELCOME] Erro: {e}")
 
-    @tasks.loop(hours=1)
+    @tasks.loop(minutes=5)
     async def cleanup_channels_loop(self):
+        # FIX: Roda a cada 5 mins e deleta se tiver > 30 mins
         category = self.bot.get_channel(config.CATEGORY_WELCOME_ID)
         if not category: return
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -342,7 +326,9 @@ class WelcomeCog(commands.Cog):
                 try:
                     last_msg_time = channel.created_at
                     async for msg in channel.history(limit=1): last_msg_time = msg.created_at
-                    if (now - last_msg_time).total_seconds() > 86400: await channel.delete()
+                    # 30 minutos = 1800 segundos
+                    if (now - last_msg_time).total_seconds() > 1800: 
+                        await channel.delete(reason="Canal de Boas-vindas expirado")
                 except: continue
 
 async def setup(bot):
