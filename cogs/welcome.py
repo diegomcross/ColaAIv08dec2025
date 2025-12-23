@@ -20,11 +20,27 @@ class FinalDecisionView(ui.View):
         await interaction.response.defer()
         
         if approved:
-            # 1. Aplica Cargos Acumulados
+            # --- FASE 1: A ISCA (Imediata) ---
+            # O usuário recebe isso e acha que precisa clicar para o processo andar
+            embed_step = discord.Embed(
+                title="⏳ Quase lá...", 
+                description="**Último passo:** Acesse o link do clã abaixo e faça sua solicitação para ter seu acesso liberado.",
+                color=discord.Color.gold()
+            )
+            embed_step.add_field(name="🔗 Link do Clã (Bungie)", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
+            embed_step.set_footer(text="Aguardando sincronização... (Isso pode levar alguns segundos)")
+            
+            await interaction.channel.send(embed=embed_step)
+
+            # --- FASE 2: TIMER OCULTO (40 Segundos) ---
+            # O bot "finge" que está esperando ou processando, forçando o usuário a ir no link
+            await asyncio.sleep(40)
+
+            # --- FASE 3: APLICAÇÃO DE CARGOS (Após o delay) ---
             roles_to_add = []
             guild = interaction.guild
             
-            # Cargo Base de Membro (Acesso ao Servidor)
+            # Cargo Base de Membro
             member_role = guild.get_role(config.ROLE_MEMBER_ID)
             if member_role: roles_to_add.append(member_role)
             
@@ -41,7 +57,14 @@ class FinalDecisionView(ui.View):
                 try: await self.member.add_roles(*roles_to_add)
                 except Exception as e: print(f"Erro ao dar cargos: {e}")
 
-            # 2. Anuncia no Chat Principal
+            # DM de Backup (Garantia)
+            try:
+                dm_embed = discord.Embed(title="🚀 Acesso Liberado!", description="Bem-vindo ao Clã.", color=discord.Color.green())
+                dm_embed.add_field(name="Link da Bungie", value=f"{config.BUNGIE_CLAN_LINK}", inline=False)
+                await self.member.send(embed=dm_embed)
+            except: pass
+
+            # Anúncio no Chat Principal
             main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
             if main_chat:
                 await main_chat.send(
@@ -50,10 +73,16 @@ class FinalDecisionView(ui.View):
                     f"Identidade: `{self.app_data['bungie_id']}`"
                 )
             
-            # 3. Mensagem de Autodestruição
-            embed = discord.Embed(title="✅ Configuração Concluída!", description="Acesso liberado. Este canal será excluído em 10 segundos...", color=discord.Color.green())
-            await interaction.channel.send(embed=embed)
-            await asyncio.sleep(10)
+            # --- FASE 4: MENSAGEM FINAL E TIMER DE DELEÇÃO (5 Minutos) ---
+            embed_final = discord.Embed(
+                title="✅ Acesso Confirmado!", 
+                description="Seus cargos foram aplicados e você já pode ver os canais do servidor.\n\n⚠️ **Este canal será excluído automaticamente em 5 minutos.**", 
+                color=discord.Color.green()
+            )
+            await interaction.channel.send(embed=embed_final)
+            
+            # Espera 5 minutos (300 segundos) antes de limpar
+            await asyncio.sleep(300)
             await interaction.channel.delete(reason="Onboarding Concluído")
             
         else:
