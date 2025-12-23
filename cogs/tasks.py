@@ -54,7 +54,6 @@ class TasksCog(commands.Cog):
     # --- LOOP: AUTO SURVEY (ENQUETE AUTOMÁTICA) ---
     @tasks.loop(time=datetime.time(hour=10, minute=0, tzinfo=BR_TIMEZONE))
     async def auto_survey_loop(self):
-        """Verifica se há eventos nos próximos 3 dias. Se não, cria enquete."""
         await self.bot.wait_until_ready()
         
         now = datetime.datetime.now(BR_TIMEZONE)
@@ -79,12 +78,8 @@ class TasksCog(commands.Cog):
             poll_channel = self.bot.get_channel(config.CHANNEL_POLLS)
             
             if main_chat and poll_channel:
-                # Escolhe 4 raids aleatórias
-                all_raids = list(quotes.RAID_INFO_PT.keys()) if hasattr(quotes, 'RAID_INFO_PT') else ["Incursão Aleatória", "Crisol", "Masmorra", "Gambit"]
-                # Fallback simples caso constants não esteja importado direto
                 from constants import RAID_INFO_PT
                 all_raids = list(RAID_INFO_PT.keys())
-
                 options = random.sample(all_raids, min(4, len(all_raids)))
                 
                 options_list = []
@@ -148,7 +143,6 @@ class TasksCog(commands.Cog):
                 
                 diff_minutes = (evt_time - now).total_seconds() / 60
                 
-                # Check Cycle (Garante que temos flags)
                 lifecycle = await db.get_event_lifecycle(event['event_id'])
                 if not lifecycle:
                     await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 0)
@@ -157,7 +151,6 @@ class TasksCog(commands.Cog):
                 guild = self.bot.get_guild(event['guild_id'])
                 if not guild: continue
                 
-                # Verifica vagas
                 rsvps = await db.get_rsvps(event['event_id'])
                 confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
                 slots = event['max_slots']
@@ -170,15 +163,15 @@ class TasksCog(commands.Cog):
                 # 1. Notificação de 24h (aprox 1440 min)
                 if 1430 <= diff_minutes <= 1450 and has_slots:
                      if not lifecycle.get('reminder_24h_sent'):
-                         # Futuro: Adicionar msg de 24h se desejar
+                         if main_chat:
+                             await main_chat.send(f"📢 **Atenção Guardiões!**\nA atividade **{event['title']}** é amanhã! Ainda há **{slots - confirmed_count} vagas**. Garanta a sua em {event_channel.mention}")
                          await db.set_lifecycle_flag(event['event_id'], 'reminder_24h_sent', 1)
 
-                # 2. Notificação de 4h (240 min) - FIX DUPLICAÇÃO
+                # 2. Notificação de 4h (240 min)
                 if 235 <= diff_minutes <= 245 and has_slots:
                     if not lifecycle.get('reminder_4h_sent'):
                         if main_chat:
                             await main_chat.send(f"📢 **Vagas Abertas!** A atividade **{event['title']}** começa em 4 horas e ainda tem {slots - confirmed_count} vagas! \nCorre lá: {event_channel.mention}")
-                        # MARCA COMO ENVIADO
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_4h_sent', 1)
 
                 # 3. Lembrete de 1h (Original + Promoção)
@@ -187,11 +180,9 @@ class TasksCog(commands.Cog):
                         if event_channel and role: 
                             await event_channel.send(f"{role.mention} ⏰ O evento começa em 1 hora! Preparem-se.")
                         
-                        # Se tiver vaga, avisa no main chat
                         if has_slots and main_chat:
                             await main_chat.send(f"⚠️ **Última Chamada!** **{event['title']}** começa em 1h e precisa de gente! {event_channel.mention}")
                         
-                        # MARCA COMO ENVIADO
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 1)
 
             except Exception as e: continue
@@ -224,15 +215,13 @@ class TasksCog(commands.Cog):
                     
                     for uid in confirmed_ids:
                         if uid in users_in_voice:
-                            # Presente
                             await db.mark_attendance_present(event['event_id'], uid)
                         else:
-                            # Se não foi marcado como presente antes (ex: entrou e saiu), marca Absent
                             current_status = await db.get_attendance_status(event['event_id'], uid)
                             if current_status != 'present':
                                 print(f"[ATTENDANCE] User {uid} ausente em {event['title']}")
 
-                # B. Monitoramento Contínuo (0 a 180 min)
+                # B. Monitoramento Contínuo
                 if 0 <= diff_minutes <= 180:
                     users_in_voice = [m.id for m in channel.members if not m.bot]
                     confirmed_ids = [r['user_id'] for r in (await db.get_rsvps(event['event_id'])) if r['status'] == 'confirmed']
@@ -243,7 +232,7 @@ class TasksCog(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def info_board_loop(self):
-        # (Código existente mantido - Resumo do Board)
+        # (Código existente mantido)
         await self.bot.wait_until_ready()
         try:
             sched_channel = self.bot.get_channel(config.CHANNEL_SCHEDULE)
