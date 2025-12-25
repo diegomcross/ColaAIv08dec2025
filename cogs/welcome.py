@@ -98,8 +98,10 @@ class BungieRequestView(ui.View):
         self.bot = bot
         self.app_data = app_data
         self.member = member
+        # ADICIONADO: Botão de Link com destaque visual
+        self.add_item(discord.ui.Button(label="🌐 Abrir Site do Clã (Bungie)", style=discord.ButtonStyle.link, url=config.BUNGIE_CLAN_LINK, row=0))
 
-    @ui.button(label="📨 Já enviei a solicitação", style=discord.ButtonStyle.primary)
+    @ui.button(label="📨 Já enviei a solicitação", style=discord.ButtonStyle.primary, row=1)
     async def confirm_sent(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         
@@ -174,10 +176,9 @@ class FinalDecisionView(ui.View):
         
         embed_step = discord.Embed(
             title="🔗 Quase lá...", 
-            description="**Passo Final:** Acesse o link do clã abaixo e faça sua solicitação na Bungie.\n\nDepois de enviar, **clique no botão azul** abaixo para avisar a moderação.",
+            description="**Passo Final:** Acesse o link do clã (botão cinza) e faça sua solicitação na Bungie.\n\nDepois de enviar, **clique no botão azul** para avisar a moderação.",
             color=discord.Color.gold()
         )
-        embed_step.add_field(name="Link do Clã (Bungie)", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
         
         await interaction.message.edit(embed=embed_step, view=BungieRequestView(self.bot, self.app_data, self.member))
 
@@ -327,8 +328,8 @@ class WelcomeCog(commands.Cog):
                     last_msg_time = channel.created_at
                     async for msg in channel.history(limit=1): last_msg_time = msg.created_at
                     
-                    # 1 Hora = 3600 segundos
-                    if (now - last_msg_time).total_seconds() > 3600:
+                    # 24 Horas = 86400 segundos (Timeout para Staff decidir)
+                    if (now - last_msg_time).total_seconds() > 86400:
                         
                         target_member = None
                         # Tenta achar o membro nas permissões do canal
@@ -339,16 +340,15 @@ class WelcomeCog(commands.Cog):
                         
                         if target_member:
                             # Se o membro JÁ TEM o cargo de acesso, ele foi aprovado mas o canal bugou
-                            # Nesse caso, só deletamos o canal.
                             member_role = channel.guild.get_role(config.ROLE_MEMBER_ID)
                             is_approved = member_role in target_member.roles if member_role else False
 
                             if not is_approved:
-                                # Membro NÃO aprovado e estourou o tempo -> KICK
+                                # Membro NÃO aprovado e estourou o tempo (24h) -> KICK
                                 try:
                                     embed_kick = discord.Embed(
                                         title="⏳ Tempo Esgotado",
-                                        description="Você foi removido do servidor por inatividade durante o processo de registro.\n\nSe quiser tentar novamente, entre pelo link abaixo:",
+                                        description="Você foi removido do servidor por inatividade no processo de registro (24h).\n\nSe quiser tentar novamente, entre pelo link abaixo:",
                                         color=discord.Color.red()
                                     )
                                     embed_kick.add_field(name="🔗 Link do Discord", value=config.DISCORD_INVITE_LINK)
@@ -356,7 +356,7 @@ class WelcomeCog(commands.Cog):
                                 except: pass
                                 
                                 try:
-                                    await target_member.kick(reason="Timeout Onboarding (1h)")
+                                    await target_member.kick(reason="Timeout Onboarding (24h)")
                                 except: pass
 
                         await channel.delete(reason="Canal de Boas-vindas expirado")
