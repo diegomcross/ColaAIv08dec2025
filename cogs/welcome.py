@@ -7,6 +7,72 @@ import asyncio
 import datetime
 from constants import BR_TIMEZONE
 
+# --- MODAL DE JURAMENTO (ATUALIZADO) ---
+class VoiceOathModal(ui.Modal, title="Termo de Compromisso"):
+    confirmation = ui.TextInput(
+        label="Digite: 'Eu concordo em participar das calls'",
+        placeholder="Eu concordo em participar das calls",
+        required=True,
+        style=discord.TextStyle.short
+    )
+
+    def __init__(self, bot, app_data, member):
+        super().__init__()
+        self.bot = bot
+        self.app_data = app_data
+        self.member = member
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validação da Frase (Case insensitive para facilitar)
+        input_clean = self.confirmation.value.strip().lower()
+        target_phrase = "eu concordo em participar das calls"
+
+        if input_clean != target_phrase:
+            # Se errou, manda mensagem de erro ephemeral (só ele vê)
+            return await interaction.response.send_message(
+                f"❌ **Frase incorreta.**\nVocê digitou: *'{self.confirmation.value}'*\nPara entrar, você deve digitar exatamente: **Eu concordo em participar das calls**", 
+                ephemeral=True
+            )
+
+        # Se acertou, prossegue para o Link da Bungie
+        await interaction.response.defer()
+        
+        embed_step = discord.Embed(
+            title="🔗 Passo Final: Bungie.net", 
+            description="**Compromisso aceito.**\n\nAgora, acesse o link do clã (botão cinza) e faça sua solicitação oficial na Bungie.\nDepois de enviar lá, **clique no botão azul** para avisar a moderação.",
+            color=discord.Color.gold()
+        )
+        embed_step.add_field(name="Link do Clã", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
+        
+        await interaction.message.edit(embed=embed_step, view=BungieRequestView(self.bot, self.app_data, self.member))
+
+# --- VIEW: PROPOSTA DE JURAMENTO ---
+class VoiceOathView(ui.View):
+    def __init__(self, bot, app_data, member):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.app_data = app_data
+        self.member = member
+
+    @ui.button(label="📝 Assinar Compromisso", style=discord.ButtonStyle.green, emoji="🎙️")
+    async def sign_oath(self, interaction: discord.Interaction, button: ui.Button):
+        # Abre o Modal para digitar
+        await interaction.response.send_modal(VoiceOathModal(self.bot, self.app_data, self.member))
+
+    @ui.button(label="Não é meu estilo (Sair)", style=discord.ButtonStyle.secondary)
+    async def leave(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        embed = discord.Embed(
+            title="🤝 Sem problemas!", 
+            description="Entendemos que cada um tem seu estilo de jogo. Como nosso foco é a comunicação em voz, talvez outro clã seja melhor para você.\n\nVocê será removido do servidor em instantes. Boa sorte, Guardião!", 
+            color=discord.Color.light_grey()
+        )
+        await interaction.message.edit(embed=embed, view=None)
+        await asyncio.sleep(5)
+        try: await self.member.kick(reason="Prefere jogar sem voz (Auto-seleção)")
+        except: pass
+        await interaction.channel.delete()
+
 # --- VIEW: APROVAÇÃO DA STAFF ---
 class StaffApprovalView(ui.View):
     def __init__(self, bot, app_data, member):
@@ -91,14 +157,13 @@ class StaffApprovalView(ui.View):
         await asyncio.sleep(5)
         await interaction.channel.delete(reason="Onboarding Recusado")
 
-# --- VIEW: CONFIRMAÇÃO DO USUÁRIO ---
+# --- VIEW: CONFIRMAÇÃO DO USUÁRIO (LINK BUNGIE) ---
 class BungieRequestView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
         self.bot = bot
         self.app_data = app_data
         self.member = member
-        # ADICIONADO: Botão de Link com destaque visual
         self.add_item(discord.ui.Button(label="🌐 Abrir Site do Clã (Bungie)", style=discord.ButtonStyle.link, url=config.BUNGIE_CLAN_LINK, row=0))
 
     @ui.button(label="📨 Já enviei a solicitação", style=discord.ButtonStyle.primary, row=1)
@@ -154,7 +219,7 @@ class BungieRequestView(ui.View):
         embed_staff.add_field(name="Disponibilidade", value=freq_str, inline=True)
         embed_staff.add_field(name="Experiência", value=xp_str, inline=True)
         
-        embed_staff.add_field(name="🎙️ Termo de Voz", value="✅ **Aceitou** (Participação Obrigatória)", inline=False)
+        embed_staff.add_field(name="🎙️ Termo de Voz", value="✅ **Assinado Manualmente**", inline=False)
 
         if alert_freq:
             embed_staff.set_footer(text="⚠️ ATENÇÃO: Este membro marcou que tem pouco tempo para jogar.")
@@ -163,35 +228,7 @@ class BungieRequestView(ui.View):
 
         await interaction.channel.send(content=f"{mentions_str}", embed=embed_staff, view=StaffApprovalView(self.bot, self.app_data, self.member))
 
-class FinalDecisionView(ui.View):
-    def __init__(self, bot, app_data, member):
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.app_data = app_data
-        self.member = member
-
-    @ui.button(label="Concordo em participar dos canais de voz", style=discord.ButtonStyle.green, emoji="🎙️")
-    async def agree(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer()
-        
-        embed_step = discord.Embed(
-            title="🔗 Quase lá...", 
-            description="**Passo Final:** Acesse o link do clã (botão cinza) e faça sua solicitação na Bungie.\n\nDepois de enviar, **clique no botão azul** para avisar a moderação.",
-            color=discord.Color.gold()
-        )
-        
-        await interaction.message.edit(embed=embed_step, view=BungieRequestView(self.bot, self.app_data, self.member))
-
-    @ui.button(label="Não concordo", style=discord.ButtonStyle.red)
-    async def disagree(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer()
-        embed = discord.Embed(title="⛔ Acesso Negado", description="Participação em voz é obrigatória. Você será removido do servidor.", color=discord.Color.red())
-        await interaction.message.edit(embed=embed, view=None)
-        await asyncio.sleep(5)
-        try: await self.member.kick(reason="Recusou regras de voz")
-        except: pass
-        await interaction.channel.delete()
-
+# --- VIEWS ANTERIORES DO QUIZ ---
 class QuestionExperienceView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
@@ -202,8 +239,14 @@ class QuestionExperienceView(ui.View):
     async def next_step(self, interaction, role_id):
         await interaction.response.defer()
         self.app_data['roles'].append(role_id)
-        embed = discord.Embed(title="4. Termo de Compromisso", description="Você entende que a participação nos **Canais de Voz** é obrigatória durante as atividades do clã?", color=discord.Color.red())
-        await interaction.message.edit(embed=embed, view=FinalDecisionView(self.bot, self.app_data, self.member))
+        
+        embed = discord.Embed(
+            title="4. Termo de Compromisso (CRÍTICO)", 
+            description="Nosso servidor é focado em interação. **A participação nos canais de voz é obrigatória** durante atividades.\n\nSe você não gosta de falar ou não pode usar microfone, infelizmente não somos o clã ideal para você.", 
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Para prosseguir, você precisará digitar uma confirmação.")
+        await interaction.message.edit(embed=embed, view=VoiceOathView(self.bot, self.app_data, self.member))
 
     @ui.button(label="Novato", style=discord.ButtonStyle.secondary)
     async def btn_novato(self, interaction: discord.Interaction, button: ui.Button): await self.next_step(interaction, config.ROLE_XP_NOVATO)
