@@ -3,6 +3,7 @@ import database as db
 import utils
 import config
 import json
+import datetime
 from constants import BR_TIMEZONE
 
 # --- CLASSE BASE PARA ENQUETES ---
@@ -19,12 +20,15 @@ class PollView(discord.ui.View):
         user_id = interaction.user.id
         message_id = interaction.message.id
         
+        # 1. Lógica de Toggle (Votos Múltiplos)
         has_voted = await db.check_user_vote_on_option(message_id, user_id, option)
+        
         if has_voted:
             await db.remove_poll_vote_option(message_id, user_id, option)
         else:
             await db.add_poll_vote(message_id, user_id, option)
         
+        # 2. Recuperar Votos
         votes = await db.get_poll_voters_detailed(message_id)
         
         vote_map = {}
@@ -34,33 +38,61 @@ class PollView(discord.ui.View):
             if opt not in vote_map: vote_map[opt] = []
             vote_map[opt].append(uid)
             
+        # 3. Recuperar TODAS as opções (incluindo as com 0 votos) dos botões
+        all_options = []
+        for child in self.children:
+            if isinstance(child, VotingButton) and child.value not in all_options:
+                all_options.append(child.value)
+
+        # 4. Reconstruir Embed com Design "Suggestion C"
         embed = interaction.message.embeds[0]
         new_desc_lines = []
         winner_option = None
-        base_desc = f"Meta para confirmar: **{self.threshold} votos**\n\n"
         
-        sorted_options = sorted(vote_map.items(), key=lambda x: len(x[1]), reverse=True)
+        # Ordena opções: primeiro por número de votos (decrescente), depois alfabético
+        sorted_options = sorted(all_options, key=lambda x: len(vote_map.get(x, [])), reverse=True)
         
-        for opt, user_ids in sorted_options:
+        for opt in sorted_options:
+            user_ids = vote_map.get(opt, [])
             count = len(user_ids)
+            
+            # Checa Vencedor
             if count >= self.threshold and not winner_option: 
                 winner_option = opt
             
+            # Formata Nomes
             voter_names = []
             guild = interaction.guild
             for uid in user_ids:
                 dname = await utils.get_user_display_name_static(uid, self.bot, guild)
                 voter_names.append(utils.clean_voter_name(dname))
-            
-            names_str = ", ".join(voter_names)
-            
-            line = f"**{opt}** ({count}): {names_str}"
-            if count >= self.threshold: line += " ✅"
+            names_str = ", ".join(voter_names) if voter_names else "-"
+
+            # --- ESTILIZAÇÃO VISUAL ---
+            if self.poll_type == 'when':
+                # Parse para Timestamp Dinâmico (<t:XXX:F>)
+                try:
+                    dt = utils.parse_human_date(opt)
+                    # Fallback visual se o parse falhar (usa o texto original)
+                    date_display = f"<t:{int(dt.timestamp())}:F>" if dt else opt
+                except:
+                    date_display = opt
+                
+                check_mark = "✅" if count >= self.threshold else ""
+                line = f"🗓️ **{date_display}** {check_mark}\n`{count}` Votos: {names_str}\n"
+                
+            else:
+                # Estilo para Atividades (Poll What)
+                check_mark = "✅" if count >= self.threshold else ""
+                line = f"**{opt}** {check_mark}\n`{count}` Votos: {names_str}\n"
+
             new_desc_lines.append(line)
             
-        embed.description = base_desc + "\n".join(new_desc_lines)
+        base_desc = f"Meta para confirmar: **{self.threshold} votos**\n\n"
+        embed.description = base_desc + "".join(new_desc_lines)
         await interaction.message.edit(embed=embed)
         
+        # 5. Disparar criação se venceu
         if winner_option:
             await self.trigger_event_creation(interaction, winner_option)
 
@@ -141,7 +173,6 @@ class VotingPollView(PollView):
 
     @discord.ui.button(label="🗑️ Apagar", style=discord.ButtonStyle.danger, row=4)
     async def btn_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Permissão simples: Apenas Admin ou quem criou (mas aqui não temos o criador fácil, então Admin/Mod)
         if not interaction.user.guild_permissions.manage_messages:
             return await interaction.response.send_message("❌ Apenas Moderadores podem apagar enquetes.", ephemeral=True)
             
@@ -183,19 +214,42 @@ class PollBuilderView(discord.ui.View):
         if not self.selected_day:
             return await interaction.response.send_message("⚠️ Selecione um dia primeiro!", ephemeral=True)
         
+        # --- FIX DE DATA CONCRETA ---
+        # Resolve "Sexta-feira" para uma data real (ex: "2025-12-26")
+        # Isso impede que o poll "quebre" se durar mais de uma semana
+        base_dt = utils.parse_human_date(self.selected_day)
+        if not base_dt:
+            return await interaction.followup.send("Erro ao calcular data.", ephemeral=True)
+        
+        date_str_concrete = base_dt.strftime("%Y-%m-%d")
+        
         raw_times = ["08:00", "11:00", "14:00", "17:00", "20:00", "22:00"]
-        valid_times = [t for t in raw_times if int(t.split(':')[0]) <= 20]
+        valid_times = [t for t in raw_times if int(t.split(':')[0]) <= 22]
         
         options_list = []
+        desc_lines = []
+        
         for t in valid_times:
-            full_opt = f"{self.selected_day} {t}"
+            # Value = Data Concreta + Hora (Para estabilidade do DB e Timestamp)
+            full_opt = f"{date_str_concrete} {t}"
+            
+            # Label = Apenas Hora (Para o botão ficar limpo)
             options_list.append({'label': t, 'value': full_opt})
+            
+            # Monta a linha inicial do Embed com Timestamp
+            try:
+                dt_opt = utils.parse_human_date(full_opt)
+                ts_display = f"<t:{int(dt_opt.timestamp())}:F>"
+            except:
+                ts_display = full_opt
+            
+            desc_lines.append(f"🗓️ **{ts_display}**\n0 Votos: -\n")
             
         poll_view = VotingPollView(self.bot, 'when', self.activity_name, options_list)
         
         embed = discord.Embed(
-            title=f"📊 Enquete de Horário: {self.activity_name}",
-            description=f"**Dia:** {self.selected_day}\n\nMeta para confirmar: **3 votos** no mesmo horário.\n*Você pode votar em mais de um horário!*",
+            title=f"📊 Horário: {self.activity_name}",
+            description=f"Meta para confirmar: **3 votos**\n\n" + "".join(desc_lines),
             color=discord.Color.blue()
         )
         embed.set_footer(text="Vote clicando nos botões abaixo. (Clique novamente para remover)")
