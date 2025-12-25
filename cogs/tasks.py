@@ -25,6 +25,7 @@ class TasksCog(commands.Cog):
         self.daily_lore_loop.start()
         self.attendance_monitor_loop.start()
         self.auto_survey_loop.start()
+        self.probation_monitor_loop.start()
         
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.start()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.start()
@@ -37,6 +38,7 @@ class TasksCog(commands.Cog):
         self.daily_lore_loop.cancel()
         self.attendance_monitor_loop.cancel()
         self.auto_survey_loop.cancel()
+        self.probation_monitor_loop.cancel()
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.cancel()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.cancel()
 
@@ -51,11 +53,10 @@ class TasksCog(commands.Cog):
         current = self.get_lore_index()
         with open(LORE_STATE_FILE, "w") as f: json.dump({"next_index": current + 1}, f)
 
-    # --- LOOP: AUTO SURVEY (ENQUETE AUTOMÁTICA) ---
+    # --- LOOP: AUTO SURVEY ---
     @tasks.loop(time=datetime.time(hour=10, minute=0, tzinfo=BR_TIMEZONE))
     async def auto_survey_loop(self):
         await self.bot.wait_until_ready()
-        
         now = datetime.datetime.now(BR_TIMEZONE)
         events = await db.get_active_events()
         
@@ -67,7 +68,6 @@ class TasksCog(commands.Cog):
                 if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
-                
                 if now < evt_time < limit_date:
                     has_event_soon = True
                     break
@@ -81,27 +81,19 @@ class TasksCog(commands.Cog):
                 from constants import RAID_INFO_PT
                 all_raids = list(RAID_INFO_PT.keys())
                 options = random.sample(all_raids, min(4, len(all_raids)))
+                options_list = [{'label': opt, 'value': opt} for opt in options]
                 
-                options_list = []
-                desc_lines = []
-                for i, opt in enumerate(options):
-                    options_list.append({'label': opt, 'value': opt})
-                    desc_lines.append(f"{i+1}\ufe0f\u20e3 {opt}")
-                
-                desc_text = "\n".join(desc_lines)
-                
+                desc_lines = [f"{i+1}\ufe0f\u20e3 {opt}" for i, opt in enumerate(options)]
                 embed = discord.Embed(
                     title="📊 O Calendário está vazio!",
-                    description=f"Nenhum evento agendado para os próximos 3 dias.\n**O que vocês querem jogar?**\n\n{desc_text}\n\n*Meta: 4 votos para agendar.*",
+                    description=f"Nenhum evento agendado para os próximos 3 dias.\n**O que vocês querem jogar?**\n\n" + "\n".join(desc_lines) + "\n\n*Meta: 4 votos para agendar.*",
                     color=discord.Color.gold()
                 )
                 
                 target_data = json.dumps({'date_str': 'hoje 21h', 'options': options_list})
                 view = VotingPollView(self.bot, 'what', target_data, options_list)
-                
                 msg = await poll_channel.send(embed=embed, view=view)
                 await db.create_poll(msg.id, poll_channel.id, main_chat.guild.id, 'what', target_data)
-                
                 await main_chat.send(f"⚠️ **Sem atividades à vista!** O bot sugeriu algumas Raids. Vote aqui: {msg.jump_url}")
 
     # --- LOOP: MANHÃ ---
@@ -112,8 +104,7 @@ class TasksCog(commands.Cog):
         channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
         if not channel: return
         quote = random.choice(quotes.MORNING_QUOTES)
-        msg = (f"🌞 **Bom dia, Guardião!**\n\n{quote}\n\n>>> 🗓️ **Organize sua fireteam:** Use `/agendar`")
-        await channel.send(msg)
+        await channel.send(f"🌞 **Bom dia, Guardião!**\n\n{quote}\n\n>>> 🗓️ **Organize sua fireteam:** Use `/agendar`")
 
     # --- LOOP: LORE ---
     @tasks.loop(time=datetime.time(hour=15, minute=0, tzinfo=BR_TIMEZONE))
@@ -128,7 +119,7 @@ class TasksCog(commands.Cog):
         await channel.send(f"{quote}")
         self.increment_lore_index()
 
-    # --- LOOP: LEMBRETES E NOTIFICAÇÕES (24h, 4h, 1h) ---
+    # --- LOOP: LEMBRETES (24h, 4h, 1h) ---
     @tasks.loop(minutes=1)
     async def reminders_loop(self):
         await self.bot.wait_until_ready()
@@ -160,34 +151,31 @@ class TasksCog(commands.Cog):
                 event_channel = guild.get_channel(event['channel_id'])
                 role = guild.get_role(event['role_id'])
 
-                # 1. Notificação de 24h (aprox 1440 min)
+                # 24 Horas
                 if 1430 <= diff_minutes <= 1450 and has_slots:
                      if not lifecycle.get('reminder_24h_sent'):
                          if main_chat:
                              await main_chat.send(f"📢 **Atenção Guardiões!**\nA atividade **{event['title']}** é amanhã! Ainda há **{slots - confirmed_count} vagas**. Garanta a sua em {event_channel.mention}")
                          await db.set_lifecycle_flag(event['event_id'], 'reminder_24h_sent', 1)
 
-                # 2. Notificação de 4h (240 min)
+                # 4 Horas
                 if 235 <= diff_minutes <= 245 and has_slots:
                     if not lifecycle.get('reminder_4h_sent'):
                         if main_chat:
                             await main_chat.send(f"📢 **Vagas Abertas!** A atividade **{event['title']}** começa em 4 horas e ainda tem {slots - confirmed_count} vagas! \nCorre lá: {event_channel.mention}")
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_4h_sent', 1)
 
-                # 3. Lembrete de 1h (Original + Promoção)
+                # 1 Hora
                 if 50 <= diff_minutes <= 65:
                     if not lifecycle.get('reminder_1h_sent'):
                         if event_channel and role: 
                             await event_channel.send(f"{role.mention} ⏰ O evento começa em 1 hora! Preparem-se.")
-                        
                         if has_slots and main_chat:
                             await main_chat.send(f"⚠️ **Última Chamada!** **{event['title']}** começa em 1h e precisa de gente! {event_channel.mention}")
-                        
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 1)
-
             except Exception as e: continue
 
-    # --- LOOP: MONITOR DE PRESENÇA E LOG ---
+    # --- LOOP: MONITOR DE PRESENÇA (TRACKING) ---
     @tasks.loop(minutes=5)
     async def attendance_monitor_loop(self):
         await self.bot.wait_until_ready()
@@ -200,45 +188,34 @@ class TasksCog(commands.Cog):
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
                 
+                # Tempo desde o início
                 diff_minutes = (now - evt_time).total_seconds() / 60
                 
-                guild = self.bot.get_guild(event['guild_id'])
-                if not guild: continue
-                channel = guild.get_channel(event['channel_id'])
-                if not channel: continue
-
-                # A. 40 MINUTOS: Check Final de Presença
-                if 38 <= diff_minutes <= 45:
-                    users_in_voice = [m.id for m in channel.members if not m.bot]
-                    rsvps = await db.get_rsvps(event['event_id'])
-                    confirmed_ids = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
-                    
-                    for uid in confirmed_ids:
-                        if uid in users_in_voice:
-                            await db.mark_attendance_present(event['event_id'], uid)
-                        else:
-                            current_status = await db.get_attendance_status(event['event_id'], uid)
-                            if current_status != 'present':
-                                print(f"[ATTENDANCE] User {uid} ausente em {event['title']}")
-
-                # B. Monitoramento Contínuo
+                # Monitora por até 3 horas (180 mins)
                 if 0 <= diff_minutes <= 180:
+                    guild = self.bot.get_guild(event['guild_id'])
+                    if not guild: continue
+                    channel = guild.get_channel(event['channel_id'])
+                    if not channel: continue
+
+                    # Pega quem está no canal de voz AGORA
                     users_in_voice = [m.id for m in channel.members if not m.bot]
-                    confirmed_ids = [r['user_id'] for r in (await db.get_rsvps(event['event_id'])) if r['status'] == 'confirmed']
-                    for uid in confirmed_ids:
-                        if uid in users_in_voice: await db.mark_attendance_present(event['event_id'], uid)
-                
+                    
+                    if users_in_voice:
+                        for uid in users_in_voice:
+                            # Marca presença no DB
+                            await db.mark_attendance_present(event['event_id'], uid)
+                            
             except Exception as e: print(f"[ATTENDANCE ERROR] Evento {event.get('event_id')}: {e}")
 
+    # --- LOOP: BOARD INFORMATIVO ---
     @tasks.loop(minutes=5)
     async def info_board_loop(self):
-        # (Código existente mantido)
         await self.bot.wait_until_ready()
         try:
             sched_channel = self.bot.get_channel(config.CHANNEL_SCHEDULE)
             if sched_channel:
-                instr_msg = None
-                list_msg = None
+                instr_msg, list_msg = None, None
                 async for msg in sched_channel.history(limit=20):
                     if msg.author == self.bot.user:
                         if msg.embeds and msg.embeds[0].title == "📅 Agendamento de Grades": instr_msg = msg
@@ -279,44 +256,91 @@ class TasksCog(commands.Cog):
 
     @tasks.loop(minutes=15)
     async def polls_management_loop(self):
-        # (Código existente mantido)
         pass
 
+    # --- LOOP: LIMPEZA E RELATÓRIO PÓS-JOGO (REPORT CARD) ---
     @tasks.loop(minutes=5)
     async def cleanup_loop(self):
-        # (Código existente mantido)
         events = await db.get_active_events()
         now = datetime.datetime.now(BR_TIMEZONE)
+        
         for event in events:
             try:
                 if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
             except: continue
-            if now > evt_time + datetime.timedelta(hours=1):
+            
+            # 3 HORAS DEPOIS (Tempo suficiente para Raid)
+            if now > evt_time + datetime.timedelta(hours=3):
                 guild = self.bot.get_guild(event['guild_id'])
                 if guild:
+                    # 1. COMPILAÇÃO DO RELATÓRIO (QUEM FOI E QUEM FALTOU)
+                    rsvps = await db.get_rsvps(event['event_id'])
+                    confirmed_ids = {r['user_id'] for r in rsvps if r['status'] == 'confirmed'}
+                    
+                    # Recupera lista de presença real do DB
+                    present_ids = set()
+                    async with db.aiosqlite.connect(db.DB_NAME) as conn:
+                        async with conn.execute("SELECT user_id FROM event_attendance WHERE event_id = ? AND status='present'", (event['event_id'],)) as cursor:
+                            rows = await cursor.fetchall()
+                            present_ids = {r[0] for r in rows}
+                    
+                    # Análise de Grupos
+                    users_present_confirmed = confirmed_ids.intersection(present_ids) # Confirmou E Foi
+                    users_flake = confirmed_ids.difference(present_ids)               # Confirmou E Faltou (Punição)
+                    users_fill = present_ids.difference(confirmed_ids)                # Não Confirmou mas Foi (Heroi)
+
+                    # Formata Nomes
+                    def format_list(uids):
+                        if not uids: return "Ninguém"
+                        return ", ".join([f"<@{uid}>" for uid in uids])
+
                     log_channel = guild.get_channel(config.CHANNEL_EVENT_LOGS)
                     if log_channel:
-                        try:
-                            rsvps = await db.get_rsvps(event['event_id'])
-                            confirmed = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
-                            names = [f"<@{uid}>" for uid in confirmed]
-                            await log_channel.send(f"**Evento Concluído:** {event['title']}\n**Data:** {evt_time.strftime('%d/%m %H:%M')}\n**Participantes:** {', '.join(names) if names else 'Ninguém'}")
-                        except: pass
+                        embed_report = discord.Embed(
+                            title=f"📝 Relatório Final: {event['title']}",
+                            description=f"**Data:** {evt_time.strftime('%d/%m %H:%M')}\nEvento encerrado.",
+                            color=discord.Color.blue()
+                        )
+                        
+                        embed_report.add_field(
+                            name=f"✅ Presentes ({len(users_present_confirmed)})", 
+                            value=format_list(users_present_confirmed), 
+                            inline=False
+                        )
+                        
+                        if users_flake:
+                            embed_report.add_field(
+                                name=f"❌ Faltas / No-Show ({len(users_flake)})", 
+                                value=format_list(users_flake), 
+                                inline=False
+                            )
+                        
+                        if users_fill:
+                            embed_report.add_field(
+                                name=f"⭐ Completaram / Fill ({len(users_fill)})", 
+                                value=format_list(users_fill), 
+                                inline=False
+                            )
+
+                        await log_channel.send(embed=embed_report)
+
+                    # 2. LIMPEZA DE CANAIS
                     try:
                         channel = guild.get_channel(event['channel_id'])
-                        if channel: await channel.delete(reason="Evento Expirado")
+                        if channel: await channel.delete(reason="Evento Concluído (3h)")
                     except: pass
                     try:
                         role = guild.get_role(event['role_id'])
-                        if role: await role.delete(reason="Evento Expirado")
+                        if role: await role.delete(reason="Evento Concluído (3h)")
                     except: pass
+
                 await db.update_event_status(event['event_id'], 'completed')
 
+    # --- LOOP: RENAME CHANNELS ---
     @tasks.loop(minutes=15)
     async def channel_rename_loop(self):
-        # (Código existente mantido)
         events = await db.get_active_events()
         for event in events:
             try:
@@ -333,6 +357,36 @@ class TasksCog(commands.Cog):
                 new_name = utils.generate_channel_name(event['title'], evt_time, event['activity_type'], free_slots, description=event['description'])
                 if channel.name != new_name: await channel.edit(name=new_name)
             except: pass
+
+    # --- LOOP: PROBATION (GHOST HUNTER) ---
+    @tasks.loop(hours=24)
+    async def probation_monitor_loop(self):
+        await self.bot.wait_until_ready()
+        main_channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
+        if not main_channel: return
+        guild = main_channel.guild
+        now = datetime.datetime.now(datetime.timezone.utc)
+        
+        for member in guild.members:
+            if member.bot: continue
+            if member.joined_at < config.INACTIVITY_START_DATE.replace(tzinfo=datetime.timezone.utc): continue
+            
+            user_roles = [r.id for r in member.roles]
+            if config.ROLE_MOD_ID in user_roles or config.ROLE_FOUNDER_ID in user_roles: continue
+
+            days_in_server = (now - member.joined_at).days
+            last_activity = await db.get_last_activity_timestamp(member.id)
+            if last_activity: continue
+            
+            if days_in_server == 2:
+                try:
+                    await member.send(embed=discord.Embed(title="👻 Está tudo bem?", description="Participe dos canais de voz!", color=discord.Color.orange()))
+                except: pass
+            elif days_in_server >= 4:
+                try:
+                    await member.send(embed=discord.Embed(title="⏳ Tempo Esgotado", description="Removido por inatividade (4 dias sem voz).", color=discord.Color.red()))
+                    await member.kick(reason="Probation: 4 dias sem voz")
+                except: pass
 
     @cleanup_loop.before_loop
     async def before_cleanup(self):
