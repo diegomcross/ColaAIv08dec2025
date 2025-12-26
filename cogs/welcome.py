@@ -10,14 +10,10 @@ from constants import BR_TIMEZONE
 
 # --- HELPER: LOG GENERATOR ---
 async def send_onboarding_log(guild, member, status_type, app_data, moderator=None, extra_info=None):
-    """
-    Gera e envia o log padronizado para o canal de registros.
-    Types: 'JOIN', 'APPROVE', 'REJECT', 'LEAVE'
-    """
     log_channel = guild.get_channel(config.CHANNEL_WELCOME_LOGS)
     if not log_channel: return
 
-    # Cores e Títulos
+    # 1. Definições de Estilo
     if status_type == 'JOIN':
         color = discord.Color.blue()
         title = "NOVO MEMBRO SE JUNTOU"
@@ -27,35 +23,35 @@ async def send_onboarding_log(guild, member, status_type, app_data, moderator=No
     elif status_type == 'REJECT':
         color = discord.Color.red()
         title = "NOVO MEMBRO RECUSADO"
-    else: # LEAVE
+    else:
         color = discord.Color.dark_grey()
         title = "NOVO MEMBRO SAIU"
 
-    # Tradução das Tags
+    # 2. Processamento de Tags
     roles_list = app_data.get('roles', [])
     tags = []
     
-    # Estilo
     if config.ROLE_SOLO in roles_list: tags.append("Joga Solo")
     elif config.ROLE_GRUPO in roles_list: tags.append("Joga em Grupo")
     
-    # Frequência
     if config.ROLE_FREQ_SEM_TEMPO in roles_list: tags.append("Sem Tempo")
     elif config.ROLE_FREQ_RARA in roles_list: tags.append("Raramente")
-    else: tags.append("Frequente") # Assumimos frequente se não marcou raro/sem tempo
+    else: tags.append("Frequente")
     
-    # Experiência (Opcional no display, mas bom ter)
-    if config.ROLE_XP_RANK11 in roles_list: tags.append("Rank 11")
-    
-    # Voz
     tags.append("Assinou Regras")
-
     tags_str = " | ".join(tags)
     
-    # Data Formatada
-    now_str = datetime.datetime.now(BR_TIMEZONE).strftime("%d de %B %Y, %H:%M")
-    
-    # Montagem do Conteúdo
+    # 3. Data em Português
+    now = datetime.datetime.now(BR_TIMEZONE)
+    try:
+        from constants import MESES_PT
+        mes_nome = MESES_PT[now.month - 1]
+    except:
+        mes_nome = now.strftime("%B")
+        
+    date_str = f"{now.day} de {mes_nome} de {now.year}, {now.strftime('%H:%M')}"
+
+    # 4. Montagem
     desc = (
         f"**Bungie ID:** `{app_data.get('bungie_id', 'N/A')}`\n"
         f"**Discord:** {member.mention} (`{member.name}`)\n"
@@ -72,7 +68,7 @@ async def send_onboarding_log(guild, member, status_type, app_data, moderator=No
 
     embed = discord.Embed(description=desc, color=color)
     embed.set_author(name=title, icon_url=member.display_avatar.url)
-    embed.set_footer(text=now_str)
+    embed.set_footer(text=date_str)
     
     if member.avatar:
         embed.set_thumbnail(url=member.avatar.url)
@@ -118,15 +114,20 @@ class StaffApprovalView(ui.View):
             try: await self.member.add_roles(*roles_to_add)
             except: pass
 
-        # DM e Anúncio
+        # DM
         try:
             embed_dm = discord.Embed(title="🚀 Acesso Aprovado!", description="Bem-vindo ao Clã!", color=discord.Color.green())
             await self.member.send(embed=embed_dm)
         except: pass
 
+        # Anúncio no Chat Principal (CORRIGIDO AQUI)
         main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
         if main_chat:
-            await main_chat.send(f"👋 Bem-vindo(a) à Torre, {self.member.mention}! (`{self.app_data['bungie_id']}`)")
+            await main_chat.send(
+                f"👋 **Olhos para cima, Guardiões!**\n"
+                f"Um novo membro foi aprovado: Seja bem-vindo(a), {self.member.mention}! 🚀\n"
+                f"Identidade: `{self.app_data['bungie_id']}`"
+            )
 
         # Finaliza Canal
         embed_final = discord.Embed(title="✅ Aprovado", description=f"Por {interaction.user.mention}. Excluindo em 5s...", color=discord.Color.green())
@@ -199,8 +200,10 @@ class BungieRequestView(ui.View):
         
         guild = interaction.guild
         mentions = []
-        if guild.get_role(config.ROLE_MOD_ID): mentions.append(guild.get_role(config.ROLE_MOD_ID).mention)
-        if guild.get_role(config.ROLE_FOUNDER_ID): mentions.append(guild.get_role(config.ROLE_FOUNDER_ID).mention)
+        mod_role = guild.get_role(config.ROLE_MOD_ID)
+        founder_role = guild.get_role(config.ROLE_FOUNDER_ID)
+        if mod_role: mentions.append(mod_role.mention)
+        if founder_role: mentions.append(founder_role.mention)
         mentions_str = " ".join(mentions) if mentions else "@Staff"
 
         embed_staff = discord.Embed(
@@ -232,7 +235,7 @@ class VoiceOathModal(ui.Modal, title="Termo de Compromisso"):
 
         await interaction.response.defer()
         
-        # Salva Progresso no DB (Ponto seguro)
+        # Salva Progresso no DB
         await db.save_pending_join(self.member.id, self.app_data['bungie_id'], self.app_data['roles'])
 
         embed = discord.Embed(title="🔗 Passo Final", description="Acesse o link e aplique na Bungie.", color=discord.Color.gold())
@@ -335,7 +338,6 @@ class SetupModal(ui.Modal, title="Identificação"):
         except: pass
         
         app_data = {'bungie_id': clean_id, 'roles': []}
-        # Inicia fluxo
         embed = discord.Embed(title="1. Estilo de Jogo", description="Solo ou Grupo?", color=discord.Color.blue())
         await interaction.response.send_message(embed=embed, view=QuestionStyleView(self.bot, app_data, self.member))
 
@@ -356,15 +358,11 @@ class WelcomeCog(commands.Cog):
     def cog_unload(self):
         self.cleanup_channels_loop.cancel()
 
-    # --- LISTENER DE SAÍDA (Para Log de "Saiu/Kickado") ---
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-        # Verifica se o membro estava em processo de Join (tinha dados pendentes)
         pending_data = await db.get_pending_join(member.id)
         if pending_data:
-            # Se achou dados, significa que saiu durante o processo ou foi kickado pelo bot
             await send_onboarding_log(member.guild, member, 'LEAVE', pending_data, extra_info="KICKADO / QUITOU")
-            # Limpa DB
             await db.remove_pending_join(member.id)
 
     @commands.Cog.listener()
@@ -372,7 +370,6 @@ class WelcomeCog(commands.Cog):
         guild = member.guild
         category = guild.get_channel(config.CATEGORY_WELCOME_ID)
         
-        # Permissões do Canal
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             member: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True),
@@ -408,7 +405,6 @@ class WelcomeCog(commands.Cog):
                     async for msg in channel.history(limit=1): last_msg_time = msg.created_at
                     
                     if (now - last_msg_time).total_seconds() > 86400: # 24h
-                        # Tenta identificar o membro pelo permission overwrite
                         target_member = None
                         for target in channel.overwrites:
                             if isinstance(target, discord.Member) and not target.bot:
@@ -416,12 +412,10 @@ class WelcomeCog(commands.Cog):
                                 break
                         
                         if target_member:
-                            # Se não é membro aprovado ainda -> KICK
                             mem_role = channel.guild.get_role(config.ROLE_MEMBER_ID)
                             if mem_role and mem_role not in target_member.roles:
                                 try: await target_member.kick(reason="Timeout Onboarding (24h)")
                                 except: pass
-                                # O Log será gerado pelo on_member_remove automaticamente
 
                         await channel.delete(reason="Expirado")
                 except: continue
