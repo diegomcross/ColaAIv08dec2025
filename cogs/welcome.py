@@ -89,7 +89,7 @@ class StaffApprovalView(ui.View):
         allowed_roles = [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID]
         
         if not any(rid in user_roles for rid in allowed_roles) and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("⛔ Sem permissão.", ephemeral=True)
+            return await interaction.response.send_message("⛔ Apenas Moderadores ou o Fundador podem aprovar.", ephemeral=True)
 
         await interaction.response.defer()
         
@@ -116,11 +116,11 @@ class StaffApprovalView(ui.View):
 
         # DM
         try:
-            embed_dm = discord.Embed(title="🚀 Acesso Aprovado!", description="Bem-vindo ao Clã!", color=discord.Color.green())
+            embed_dm = discord.Embed(title="🚀 Acesso Aprovado!", description="Bem-vindo ao Clã! Agora você tem acesso total ao servidor. Nos vemos em órbita!", color=discord.Color.green())
             await self.member.send(embed=embed_dm)
         except: pass
 
-        # Anúncio no Chat Principal (CORRIGIDO AQUI)
+        # Anúncio no Chat Principal (FRASE RESTAURADA)
         main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
         if main_chat:
             await main_chat.send(
@@ -130,10 +130,15 @@ class StaffApprovalView(ui.View):
             )
 
         # Finaliza Canal
-        embed_final = discord.Embed(title="✅ Aprovado", description=f"Por {interaction.user.mention}. Excluindo em 5s...", color=discord.Color.green())
+        embed_final = discord.Embed(title="✅ Membro Aprovado", description=f"Aprovado por {interaction.user.mention}.\nO canal será excluído em 5 minutos.", color=discord.Color.green())
         await interaction.channel.send(embed=embed_final)
-        await asyncio.sleep(5)
-        await interaction.channel.delete(reason="Aprovado")
+        
+        button.disabled = True
+        self.children[1].disabled = True
+        await interaction.message.edit(view=self)
+
+        await asyncio.sleep(300)
+        await interaction.channel.delete(reason="Onboarding Aprovado")
 
     @ui.button(label="⛔ Rejeitar/Expulsar", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: ui.Button):
@@ -151,16 +156,16 @@ class StaffApprovalView(ui.View):
         # Limpa DB
         await db.remove_pending_join(self.member.id)
 
-        embed = discord.Embed(title="❌ Recusado", description="Usuário será removido.", color=discord.Color.red())
+        embed = discord.Embed(title="❌ Solicitação Recusada", description=f"Recusado por {interaction.user.mention}. O usuário será removido.", color=discord.Color.red())
         await interaction.channel.send(embed=embed)
         
         try: 
-            await self.member.send("Sua solicitação foi recusada pela moderação.")
+            await self.member.send("Sua solicitação para entrar no clã foi recusada pela moderação.")
             await self.member.kick(reason="Recusado no Onboarding")
         except: pass
         
         await asyncio.sleep(5)
-        await interaction.channel.delete(reason="Recusado")
+        await interaction.channel.delete(reason="Onboarding Recusado")
 
 # --- VIEW: CONFIRMAÇÃO USUÁRIO ---
 class BungieRequestView(ui.View):
@@ -181,23 +186,31 @@ class BungieRequestView(ui.View):
         # Feedback Visual
         embed_wait = discord.Embed(
             title="🔄 Aguardando Aprovação",
-            description="Obrigado! Notifiquei os moderadores.",
+            description="Obrigado! Notifiquei os moderadores.\nAssim que eles confirmarem seu pedido na Bungie, seu acesso será liberado aqui automaticamente.",
             color=discord.Color.orange()
         )
         await interaction.message.edit(embed=embed_wait, view=None)
 
-        # Monta Embed para Staff
+        # Monta Embed para Staff (LAYOUT RESTAURADO)
         roles_selected = self.app_data['roles']
-        estilo_str = "Grupo" if config.ROLE_GRUPO in roles_selected else "Solo"
+        
+        estilo_str = "Indefinido"
+        if config.ROLE_SOLO in roles_selected: estilo_str = "👤 Solo (Lobo Solitário)"
+        elif config.ROLE_GRUPO in roles_selected: estilo_str = "👥 Grupo (Prefere Fireteam)"
+        
         freq_str = "Normal"
         alert_freq = False
         if config.ROLE_FREQ_SEM_TEMPO in roles_selected: 
-            freq_str = "⚠️ Sem Tempo"
+            freq_str = "⚠️ Sem Tempo (Muito Casual)"
             alert_freq = True
         elif config.ROLE_FREQ_RARA in roles_selected:
-            freq_str = "⚠️ Raro"
+            freq_str = "⚠️ Joga Raramente"
             alert_freq = True
         
+        xp_str = "Normal"
+        if config.ROLE_XP_NOVATO in roles_selected: xp_str = "👶 Novato (New Light)"
+        elif config.ROLE_XP_RANK11 in roles_selected: xp_str = "🔥 Rank 11 (Hardcore)"
+
         guild = interaction.guild
         mentions = []
         mod_role = guild.get_role(config.ROLE_MOD_ID)
@@ -208,20 +221,35 @@ class BungieRequestView(ui.View):
 
         embed_staff = discord.Embed(
             title="🛡️ Nova Solicitação Pendente",
-            description=f"Usuário: {self.member.mention}",
+            description=f"O usuário {self.member.mention} completou o cadastro e aguarda aprovação.",
             color=discord.Color.blue()
         )
-        embed_staff.add_field(name="🆔 Bungie ID", value=f"`{self.app_data['bungie_id']}`", inline=True)
-        embed_staff.add_field(name="Perfil", value=f"{estilo_str} | {freq_str}", inline=True)
-        embed_staff.add_field(name="Voz", value="✅ Assinou", inline=False)
         
-        if alert_freq: embed_staff.set_footer(text="⚠️ Atenção: Membro com pouco tempo.")
+        embed_staff.add_field(name="🆔 Bungie ID", value=f"`{self.app_data['bungie_id']}`", inline=True)
+        embed_staff.add_field(name="🔗 Link Rápido", value=f"[Ver na Bungie]({config.BUNGIE_CLAN_LINK})", inline=True)
+        
+        embed_staff.add_field(name="\u200b", value="**📋 Perfil do Candidato:**", inline=False)
+        embed_staff.add_field(name="Estilo de Jogo", value=estilo_str, inline=True)
+        embed_staff.add_field(name="Disponibilidade", value=freq_str, inline=True)
+        embed_staff.add_field(name="Experiência", value=xp_str, inline=True)
+        
+        embed_staff.add_field(name="🎙️ Termo de Voz", value="✅ **Assinado Manualmente**", inline=False)
+
+        if alert_freq:
+            embed_staff.set_footer(text="⚠️ ATENÇÃO: Este membro marcou que tem pouco tempo para jogar.")
+        else:
+            embed_staff.set_footer(text="Verifique se o pedido está na Bungie antes de aprovar.")
 
         await interaction.channel.send(content=mentions_str, embed=embed_staff, view=StaffApprovalView(self.bot, self.app_data, self.member))
 
 # --- MODAL DE JURAMENTO ---
 class VoiceOathModal(ui.Modal, title="Termo de Compromisso"):
-    confirmation = ui.TextInput(label="Digite a frase abaixo:", placeholder="Eu concordo em participar das calls", required=True)
+    confirmation = ui.TextInput(
+        label="Digite: 'Eu concordo em participar das calls'",
+        placeholder="Eu concordo em participar das calls",
+        required=True,
+        style=discord.TextStyle.short
+    )
 
     def __init__(self, bot, app_data, member):
         super().__init__()
@@ -231,15 +259,22 @@ class VoiceOathModal(ui.Modal, title="Termo de Compromisso"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirmation.value.strip().lower() != "eu concordo em participar das calls":
-            return await interaction.response.send_message("❌ Frase incorreta.", ephemeral=True)
+            return await interaction.response.send_message(
+                f"❌ **Frase incorreta.**\nVocê digitou: *'{self.confirmation.value}'*\nPara entrar, você deve digitar exatamente: **Eu concordo em participar das calls**", 
+                ephemeral=True
+            )
 
         await interaction.response.defer()
         
         # Salva Progresso no DB
         await db.save_pending_join(self.member.id, self.app_data['bungie_id'], self.app_data['roles'])
 
-        embed = discord.Embed(title="🔗 Passo Final", description="Acesse o link e aplique na Bungie.", color=discord.Color.gold())
-        embed.add_field(name="Link", value=config.BUNGIE_CLAN_LINK)
+        embed = discord.Embed(
+            title="🔗 Passo Final: Bungie.net", 
+            description="**Compromisso aceito.**\n\nAgora, acesse o link do clã (botão cinza) e faça sua solicitação oficial na Bungie.\nDepois de enviar lá, **clique no botão azul** para avisar a moderação.",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="Link do Clã", value=f"[Clique para Entrar]({config.BUNGIE_CLAN_LINK})", inline=False)
         await interaction.message.edit(embed=embed, view=BungieRequestView(self.bot, self.app_data, self.member))
 
 # --- VIEW: PROPOSTA DE JURAMENTO ---
@@ -254,17 +289,24 @@ class VoiceOathView(ui.View):
     async def sign_oath(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(VoiceOathModal(self.bot, self.app_data, self.member))
 
-    @ui.button(label="Sair", style=discord.ButtonStyle.secondary)
+    @ui.button(label="Não é meu estilo (Sair)", style=discord.ButtonStyle.secondary)
     async def leave(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_message("Você será removido.", ephemeral=True)
+        await interaction.response.defer()
         # Log de Saída Manual
         await send_onboarding_log(interaction.guild, self.member, 'LEAVE', self.app_data, extra_info="NÃO CONCORDOU COM REGRAS")
-        await asyncio.sleep(2)
-        try: await self.member.kick(reason="Recusou Regras")
+        
+        embed = discord.Embed(
+            title="🤝 Sem problemas!", 
+            description="Entendemos que cada um tem seu estilo de jogo. Como nosso foco é a comunicação em voz, talvez outro clã seja melhor para você.\n\nVocê será removido do servidor em instantes. Boa sorte, Guardião!", 
+            color=discord.Color.light_grey()
+        )
+        await interaction.message.edit(embed=embed, view=None)
+        await asyncio.sleep(5)
+        try: await self.member.kick(reason="Prefere jogar sem voz (Auto-seleção)")
         except: pass
         await interaction.channel.delete()
 
-# --- VIEWS DE PERGUNTAS (Quiz) ---
+# --- VIEWS DE PERGUNTAS (Quiz - TEXTOS RESTAURADOS) ---
 class QuestionExperienceView(ui.View):
     def __init__(self, bot, app_data, member):
         super().__init__(timeout=None)
@@ -274,7 +316,13 @@ class QuestionExperienceView(ui.View):
     async def next_step(self, interaction, role_id):
         await interaction.response.defer()
         self.app_data['roles'].append(role_id)
-        embed = discord.Embed(title="4. Compromisso de Voz", description="A participação em voz é **obrigatória**.", color=discord.Color.red())
+        # TEXTO RESTAURADO
+        embed = discord.Embed(
+            title="4. Termo de Compromisso (CRÍTICO)", 
+            description="Nosso servidor é focado em interação. **A participação nos canais de voz é obrigatória** durante atividades.\n\nSe você não gosta de falar ou não pode usar microfone, infelizmente não somos o clã ideal para você.", 
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Para prosseguir, você precisará digitar uma confirmação.")
         await interaction.message.edit(embed=embed, view=VoiceOathView(self.bot, self.app_data, self.member))
     @ui.button(label="Novato", style=discord.ButtonStyle.secondary)
     async def b1(self, i, b): await self.next_step(i, config.ROLE_XP_NOVATO)
@@ -282,7 +330,7 @@ class QuestionExperienceView(ui.View):
     async def b2(self, i, b): await self.next_step(i, config.ROLE_XP_INICIADO)
     @ui.button(label="Experiente", style=discord.ButtonStyle.primary)
     async def b3(self, i, b): await self.next_step(i, config.ROLE_XP_EXPERIENTE)
-    @ui.button(label="Rank 11", style=discord.ButtonStyle.primary)
+    @ui.button(label="Rank 11", style=discord.ButtonStyle.primary, emoji="🔥")
     async def b4(self, i, b): await self.next_step(i, config.ROLE_XP_RANK11)
 
 class QuestionFrequencyView(ui.View):
@@ -294,17 +342,17 @@ class QuestionFrequencyView(ui.View):
     async def next_step(self, interaction, role_id=None):
         await interaction.response.defer()
         if role_id: self.app_data['roles'].append(role_id)
-        embed = discord.Embed(title="3. Experiência", description="Nível de conhecimento?", color=discord.Color.blue())
+        embed = discord.Embed(title="3. Nível de Experiência", description="Como você classificaria seu conhecimento no Destiny 2?", color=discord.Color.blue())
         await interaction.message.edit(embed=embed, view=QuestionExperienceView(self.bot, self.app_data, self.member))
-    @ui.button(label="1-2x semana", style=discord.ButtonStyle.secondary)
+    @ui.button(label="1-2x por semana", style=discord.ButtonStyle.secondary)
     async def b1(self, i, b): await self.next_step(i, config.ROLE_FREQ_RARA)
-    @ui.button(label="3-4x semana", style=discord.ButtonStyle.secondary)
+    @ui.button(label="3-4x por semana", style=discord.ButtonStyle.secondary)
     async def b2(self, i, b): await self.next_step(i)
-    @ui.button(label="Todo dia", style=discord.ButtonStyle.success)
+    @ui.button(label="Quase todos os dias", style=discord.ButtonStyle.success)
     async def b3(self, i, b): await self.next_step(i)
     @ui.button(label="Raramente", style=discord.ButtonStyle.secondary)
     async def b4(self, i, b): await self.next_step(i, config.ROLE_FREQ_RARA)
-    @ui.button(label="Sem Tempo", style=discord.ButtonStyle.danger)
+    @ui.button(label="Sem tempo", style=discord.ButtonStyle.danger)
     async def b5(self, i, b): await self.next_step(i, config.ROLE_FREQ_SEM_TEMPO)
 
 class QuestionStyleView(ui.View):
@@ -316,11 +364,11 @@ class QuestionStyleView(ui.View):
     async def next_step(self, interaction, role_id):
         await interaction.response.defer()
         self.app_data['roles'].append(role_id)
-        embed = discord.Embed(title="2. Frequência", description="Quanto você joga?", color=discord.Color.blue())
+        embed = discord.Embed(title="2. Frequência de Jogo", description="Com que frequência você costuma jogar?", color=discord.Color.blue())
         await interaction.message.edit(embed=embed, view=QuestionFrequencyView(self.bot, self.app_data, self.member))
-    @ui.button(label="Solo", style=discord.ButtonStyle.secondary)
+    @ui.button(label="Solo", style=discord.ButtonStyle.secondary, emoji="👤")
     async def b1(self, i, b): await self.next_step(i, config.ROLE_SOLO)
-    @ui.button(label="Grupo", style=discord.ButtonStyle.success)
+    @ui.button(label="Grupo", style=discord.ButtonStyle.success, emoji="👥")
     async def b2(self, i, b): await self.next_step(i, config.ROLE_GRUPO)
 
 class SetupModal(ui.Modal, title="Identificação"):
@@ -332,13 +380,20 @@ class SetupModal(ui.Modal, title="Identificação"):
     async def on_submit(self, interaction: discord.Interaction):
         clean_id = re.sub(r'\s*#\s*', '#', self.bungie_id.value.strip())
         if not re.match(r'^.+#\d+$', clean_id):
-            return await interaction.response.send_message("❌ Formato inválido. Use Nome#1234", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ **Formato Inválido!**\n"
+                "Você deve incluir o número do seu Bungie ID.\n"
+                "Exemplo correto: `Guardian#1234`\n\n"
+                "Tente novamente.",
+                ephemeral=True
+            )
         
         try: await self.member.edit(nick=clean_id.split('#')[0][:32])
         except: pass
         
         app_data = {'bungie_id': clean_id, 'roles': []}
-        embed = discord.Embed(title="1. Estilo de Jogo", description="Solo ou Grupo?", color=discord.Color.blue())
+        # TEXTO RESTAURADO
+        embed = discord.Embed(title="1. Estilo de Jogo", description="Você costuma jogar mais sozinho ou em grupo?", color=discord.Color.blue())
         await interaction.response.send_message(embed=embed, view=QuestionStyleView(self.bot, app_data, self.member))
 
 class StartOnboardingView(ui.View):
@@ -386,7 +441,8 @@ class WelcomeCog(commands.Cog):
         try:
             channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=overwrites)
             await asyncio.sleep(2)
-            embed = discord.Embed(title=f"Olá, {member.name}!", description="Bem-vindo(a). Clique abaixo para iniciar.", color=discord.Color.gold())
+            # TEXTO RESTAURADO
+            embed = discord.Embed(title=f"Olá, {member.name}!", description="Seja bem-vindo(a).\n\nPara entrar no clã, precisamos configurar seu perfil. No final, um Moderador irá aprovar seu acesso.\n\n**Clique abaixo para começar.**", color=discord.Color.gold())
             embed.set_thumbnail(url=member.display_avatar.url)
             await channel.send(f"{member.mention}", embed=embed, view=StartOnboardingView(self.bot, member))
         except Exception as e:
@@ -414,6 +470,17 @@ class WelcomeCog(commands.Cog):
                         if target_member:
                             mem_role = channel.guild.get_role(config.ROLE_MEMBER_ID)
                             if mem_role and mem_role not in target_member.roles:
+                                try:
+                                    # MENSAGEM RESTAURADA
+                                    embed_kick = discord.Embed(
+                                        title="⏳ Tempo Esgotado",
+                                        description="Você foi removido do servidor por inatividade no processo de registro (24h).\n\nSe quiser tentar novamente, entre pelo link abaixo:",
+                                        color=discord.Color.red()
+                                    )
+                                    embed_kick.add_field(name="🔗 Link do Discord", value=config.DISCORD_INVITE_LINK)
+                                    await target_member.send(embed=embed_kick)
+                                except: pass
+                                
                                 try: await target_member.kick(reason="Timeout Onboarding (24h)")
                                 except: pass
 
