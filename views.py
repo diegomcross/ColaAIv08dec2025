@@ -3,6 +3,7 @@ import database as db
 import utils
 from constants import BR_TIMEZONE
 import datetime
+import re
 
 # --- AUXILIAR DE NOTIFICAÇÃO ---
 async def notify_confirmed_users(interaction: discord.Interaction, event_id: int, message: str):
@@ -12,13 +13,13 @@ async def notify_confirmed_users(interaction: discord.Interaction, event_id: int
         confirmed_ids = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
         
         for uid in confirmed_ids:
-            if uid == interaction.user.id: continue # Não notificar quem fez a ação
+            if uid == interaction.user.id: continue
             try:
                 user = interaction.client.get_user(uid) or await interaction.client.fetch_user(uid)
                 await user.send(message)
             except: pass
     except Exception as e:
-        print(f"[DEBUG] Erro ao notificar usuários: {e}")
+        print(f"[NOTIFY ERROR] {e}")
 
 # --- MODAL DE EDIÇÃO ---
 class EventEditModal(discord.ui.Modal, title="Editar Evento"):
@@ -41,14 +42,14 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
         else: dt_obj = raw_date
         
         if dt_obj.tzinfo is None: dt_obj = BR_TIMEZONE.localize(dt_obj)
-        self.date_input = discord.ui.TextInput(label="Data/Hora", default=dt_obj.strftime("%d/%m %H:%M"))
+        self.date_input = discord.ui.TextInput(label="Data/Hora (dd/mm HH:MM)", default=dt_obj.strftime("%d/%m %H:%M"))
         self.add_item(self.date_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
         new_dt = utils.parse_human_date(self.date_input.value)
-        if not new_dt: return await interaction.followup.send("❌ Data inválida.", ephemeral=True)
+        if not new_dt: return await interaction.followup.send("❌ Data inválida. Use formato dia/mês hora:minuto", ephemeral=True)
             
         new_title = self.title_input.value
         official_name, act_type, slots = utils.detect_activity_details(new_title)
@@ -63,12 +64,10 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
         if date_changed:
              msg_notification = f"📅 **DATA ALTERADA:** O evento **{official_name}** foi remarcado para **{new_dt.strftime('%d/%m às %H:%M')}** por {interaction.user.display_name}."
 
-        # Atualizar DB
         await db.update_event_details(
             self.event_data['event_id'], official_name, self.desc_input.value, new_dt, act_type, slots
         )
         
-        # Notificar via DM
         await notify_confirmed_users(interaction, self.event_data['event_id'], msg_notification)
         
         # Atualizar Visual
@@ -82,25 +81,21 @@ class EventEditModal(discord.ui.Modal, title="Editar Evento"):
                 msg = await channel.fetch_message(event['message_id'])
                 await msg.edit(embed=embed)
                 
-                # --- AQUI: Renomear Imediatamente (Prioridade para Edição Manual) ---
-                # Como a data mudou, o nome do canal ESTÁ ERRADO. Precisamos tentar corrigir agora.
+                # Renomear Canal
                 confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
                 free_slots = max(0, slots - confirmed_count)
                 new_name = utils.generate_channel_name(official_name, new_dt, act_type, free_slots, description=self.desc_input.value)
                 
                 if channel.name != new_name:
-                    try:
-                        await channel.edit(name=new_name)
-                    except Exception as e:
-                        print(f"[DEBUG] Rate Limit ao renomear canal na edição: {e}")
+                    try: await channel.edit(name=new_name)
+                    except: pass
 
-                # Avisar no chat do evento
                 if date_changed:
-                    await channel.send(f"📢 {interaction.user.mention} alterou a data deste evento para **{new_dt.strftime('%d/%m às %H:%M')}**!")
+                    await channel.send(f"📢 {interaction.user.mention} alterou a data para **{new_dt.strftime('%d/%m às %H:%M')}**!")
                     
-                await interaction.followup.send("✅ Evento atualizado com sucesso!", ephemeral=True)
+                await interaction.followup.send("✅ Evento atualizado!", ephemeral=True)
             except Exception as e:
-                await interaction.followup.send(f"Evento salvo, mas houve erro visual: {e}", ephemeral=True)
+                await interaction.followup.send(f"Salvo, mas erro visual: {e}", ephemeral=True)
 
 # --- VIEW PRINCIPAL ---
 class PersistentRsvpView(discord.ui.View):
@@ -108,68 +103,88 @@ class PersistentRsvpView(discord.ui.View):
         super().__init__(timeout=None)
 
     async def update_event_embed(self, interaction: discord.Interaction, event_id: int):
-        event = await db.get_event(event_id)
-        if not event: return
-        
-        rsvps = await db.get_rsvps(event_id)
-        confirmed = [r for r in rsvps if r['status'] == 'confirmed']
-        waitlist = [r for r in rsvps if r['status'] == 'waitlist']
-        slots = event['max_slots']
-        
-        # Lógica de Lista de Espera Automática
-        changed = False
-        while len(confirmed) < slots and len(waitlist) > 0:
-            lucky_user = waitlist.pop(0) 
-            await db.update_rsvp(event_id, lucky_user['user_id'], 'confirmed')
-            confirmed.append(lucky_user)
-            changed = True
-        
-        if changed: rsvps = await db.get_rsvps(event_id)
+        """Atualiza a mensagem principal do evento."""
+        try:
+            event = await db.get_event(event_id)
+            if not event: return
+            
+            rsvps = await db.get_rsvps(event_id)
+            confirmed = [r for r in rsvps if r['status'] == 'confirmed']
+            waitlist = [r for r in rsvps if r['status'] == 'waitlist']
+            slots = event['max_slots']
+            
+            # Auto-promote Waitlist
+            changed = False
+            while len(confirmed) < slots and len(waitlist) > 0:
+                lucky_user = waitlist.pop(0) 
+                await db.update_rsvp(event_id, lucky_user['user_id'], 'confirmed')
+                confirmed.append(lucky_user)
+                changed = True
+            
+            if changed: rsvps = await db.get_rsvps(event_id)
 
-        # Atualiza APENAS o Embed (Mensagem)
-        embed = await utils.build_event_embed(dict(event), rsvps, interaction.client)
-        await interaction.message.edit(embed=embed)
-        
-        # --- IMPORTANTE: NOME DO CANAL NÃO É ALTERADO AQUI ---
-        # A atualização das vagas no nome do canal (ex: "2vagas" -> "1vaga")
-        # será feita pelo loop de 15 minutos em tasks.py para evitar Rate Limit.
+            embed = await utils.build_event_embed(dict(event), rsvps, interaction.client)
+            await interaction.message.edit(embed=embed)
+        except Exception as e:
+            print(f"[UPDATE EMBED ERROR] {e}")
 
     async def handle_click(self, interaction: discord.Interaction, status: str):
+        # 1. Defer IMEDIATO para evitar "Interaction Failed"
+        await interaction.response.defer(ephemeral=True)
+
         try:
+            # 2. Parsing Robusto do ID
+            if not interaction.message.embeds:
+                return await interaction.followup.send("Erro: Embed não encontrado.", ephemeral=True)
+                
             footer_text = interaction.message.embeds[0].footer.text
-            event_id = int(footer_text.split(": ")[1])
-        except: return await interaction.response.send_message("Erro ID.", ephemeral=True)
-        
-        event = await db.get_event(event_id)
-        if not event: return await interaction.response.send_message("Evento deletado.", ephemeral=True)
+            # Busca qualquer número no rodapé (ex: "ID do Evento: 123" ou "ID: 123")
+            match = re.search(r'\d+', footer_text)
+            if not match:
+                return await interaction.followup.send("Erro: ID do evento não encontrado no rodapé.", ephemeral=True)
+            
+            event_id = int(match.group())
+            
+            event = await db.get_event(event_id)
+            if not event:
+                return await interaction.followup.send("❌ Este evento foi deletado do banco de dados.", ephemeral=True)
 
-        rsvps = await db.get_rsvps(event_id)
-        confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
-        
-        final_status = status
-        if status == 'confirmed':
-            user_current = next((r for r in rsvps if r['user_id'] == interaction.user.id), None)
-            is_confirmed = user_current and user_current['status'] == 'confirmed'
-            # Se cheio e não é um dos confirmados, vai pra espera
-            if confirmed_count >= event['max_slots'] and not is_confirmed:
-                final_status = 'waitlist'
-                await interaction.response.send_message("Vagas cheias! Você foi para a **Lista de Espera**.", ephemeral=True)
-            else:
-                await interaction.response.send_message("Confirmado!", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"Status: {status}", ephemeral=True)
+            # 3. Lógica de RSVP
+            rsvps = await db.get_rsvps(event_id)
+            confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
+            
+            final_status = status
+            if status == 'confirmed':
+                user_current = next((r for r in rsvps if r['user_id'] == interaction.user.id), None)
+                is_confirmed = user_current and user_current['status'] == 'confirmed'
+                
+                if confirmed_count >= event['max_slots'] and not is_confirmed:
+                    final_status = 'waitlist'
+                    await interaction.followup.send("⚠️ Vagas cheias! Você entrou na **Lista de Espera**.", ephemeral=True)
+                else:
+                    await interaction.followup.send("✅ Presença Confirmada!", ephemeral=True)
+            elif status == 'absent':
+                await interaction.followup.send("❌ Marcado como ausente.", ephemeral=True)
+            elif status == 'maybe':
+                await interaction.followup.send("🔷 Marcado como talvez.", ephemeral=True)
 
-        await db.update_rsvp(event_id, interaction.user.id, final_status)
-        
-        # Atualiza cargos
-        role = interaction.guild.get_role(event['role_id'])
-        if role:
-            try:
-                if final_status in ['confirmed', 'waitlist']: await interaction.user.add_roles(role)
-                else: await interaction.user.remove_roles(role)
-            except: pass
-        
-        await self.update_event_embed(interaction, event_id)
+            # 4. Atualizar DB
+            await db.update_rsvp(event_id, interaction.user.id, final_status)
+            
+            # 5. Atualizar Cargos
+            role = interaction.guild.get_role(event['role_id'])
+            if role:
+                try:
+                    if final_status in ['confirmed', 'waitlist']: await interaction.user.add_roles(role)
+                    else: await interaction.user.remove_roles(role)
+                except: pass
+            
+            # 6. Atualizar Visual
+            await self.update_event_embed(interaction, event_id)
+
+        except Exception as e:
+            print(f"[HANDLE CLICK ERROR] {e}")
+            await interaction.followup.send("Ocorreu um erro interno ao processar seu clique.", ephemeral=True)
 
     async def check_manager_permission(self, interaction: discord.Interaction, event):
         if interaction.user.id == event['creator_id']: return True
@@ -191,40 +206,52 @@ class PersistentRsvpView(discord.ui.View):
 
     @discord.ui.button(label="Editar", style=discord.ButtonStyle.primary, custom_id="btn_edit", emoji="✏️", row=1)
     async def btn_edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Para botões que abrem Modals, NÃO podemos usar defer() antes.
         try:
-            event_id = int(interaction.message.embeds[0].footer.text.split(": ")[1])
+            footer_text = interaction.message.embeds[0].footer.text
+            match = re.search(r'\d+', footer_text)
+            if not match: return await interaction.response.send_message("Erro ID.", ephemeral=True)
+            event_id = int(match.group())
+            
             event = await db.get_event(event_id)
-        except: return await interaction.response.send_message("Erro buscar evento.", ephemeral=True)
+            if not event: return await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
 
-        if not await self.check_manager_permission(interaction, event):
-            return await interaction.response.send_message("❌ Apenas o Criador ou Gerentes podem editar.", ephemeral=True)
+            if not await self.check_manager_permission(interaction, event):
+                return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-        await interaction.response.send_modal(EventEditModal(dict(event), interaction.client))
+            await interaction.response.send_modal(EventEditModal(dict(event), interaction.client))
+        except Exception as e:
+            print(f"[EDIT ERROR] {e}")
 
     @discord.ui.button(label="Apagar", style=discord.ButtonStyle.danger, custom_id="btn_delete", emoji="🗑️", row=1)
     async def btn_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            event_id = int(interaction.message.embeds[0].footer.text.split(": ")[1])
-            event = await db.get_event(event_id)
-        except: return await interaction.response.send_message("Erro buscar evento.", ephemeral=True)
-
-        if not await self.check_manager_permission(interaction, event):
-            return await interaction.response.send_message("❌ Apenas o Criador ou Gerentes podem apagar.", ephemeral=True)
-
-        await notify_confirmed_users(interaction, event_id, f"⚠️ **Aviso:** O evento **{event['title']}** foi CANCELADO por {interaction.user.display_name}.")
-        
         await interaction.response.defer(ephemeral=True)
-        await interaction.followup.send("✅ Iniciando exclusão...", ephemeral=True)
+        try:
+            footer_text = interaction.message.embeds[0].footer.text
+            match = re.search(r'\d+', footer_text)
+            if not match: return await interaction.followup.send("Erro ID.", ephemeral=True)
+            event_id = int(match.group())
+            
+            event = await db.get_event(event_id)
+            if not event: return await interaction.followup.send("Evento já apagado.", ephemeral=True)
 
-        guild = interaction.guild
-        if guild:
-            try:
-                channel = guild.get_channel(event['channel_id'])
-                if channel: await channel.delete(reason="Apagado pelo usuário")
-            except: pass
-            try:
-                role = guild.get_role(event['role_id'])
-                if role: await role.delete(reason="Apagado pelo usuário")
-            except: pass
-        
-        await db.delete_event(event_id)
+            if not await self.check_manager_permission(interaction, event):
+                return await interaction.followup.send("❌ Sem permissão.", ephemeral=True)
+
+            await notify_confirmed_users(interaction, event_id, f"⚠️ **Aviso:** O evento **{event['title']}** foi CANCELADO.")
+            await interaction.followup.send("✅ Deletando...", ephemeral=True)
+
+            guild = interaction.guild
+            if guild:
+                try:
+                    channel = guild.get_channel(event['channel_id'])
+                    if channel: await channel.delete(reason="User Delete")
+                except: pass
+                try:
+                    role = guild.get_role(event['role_id'])
+                    if role: await role.delete(reason="User Delete")
+                except: pass
+            
+            await db.delete_event(event_id)
+        except Exception as e:
+            print(f"[DELETE ERROR] {e}")
