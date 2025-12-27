@@ -5,7 +5,7 @@ import config
 import datetime
 import asyncio
 from constants import BR_TIMEZONE, RANK_THRESHOLDS, RANK_STYLE
-import utils
+import utils  #
 
 class RolesManager(commands.Cog):
     def __init__(self, bot):
@@ -21,9 +21,9 @@ class RolesManager(commands.Cog):
     async def on_ready(self):
         """Força atualização de cargos e nomes assim que o bot liga."""
         await self.bot.wait_until_ready()
-        print("[ROLES] Iniciando sincronização (Modo Seguro - Delay 2.0s)...")
-        # Roda em background para não bloquear o bot
-        asyncio.create_task(self.sync_member_ranks())
+        print("[ROLES] Iniciando sincronização (Modo Seguro - Anti Rate Limit)...")
+        # Roda em background para não bloquear a inicialização
+        self.bot.loop.create_task(self.sync_member_ranks())
 
     async def sync_member_ranks(self):
         if not self.bot.guilds: return
@@ -43,7 +43,7 @@ class RolesManager(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
-            # --- CRÍTICO: DELAY ALTO PARA EVITAR 429 ---
+            # --- CRÍTICO: DELAY PARA EVITAR 429 ---
             await asyncio.sleep(2.0)
 
             # Ignora Staff
@@ -55,7 +55,7 @@ class RolesManager(commands.Cog):
             h7 = valid_hours_map.get(member.id, 0)
             target_rank = self.get_target_rank(member, h7)
             
-            # 1. ATUALIZAR NOME (Com Limpeza Profunda)
+            # 1. ATUALIZAR NOME (USANDO O CLEANER DO UTILS)
             await self.update_nickname(member, target_rank)
 
             # 2. ATUALIZAR CARGOS
@@ -110,7 +110,8 @@ class RolesManager(commands.Cog):
         
         prefix = RANK_STYLE.get(rank_key, "")
         
-        # Limpa TUDO antes de aplicar o novo
+        # --- CORREÇÃO: Usa o utils.strip_rank_prefix ---
+        # Isso remove QUALQUER lixo antigo (🏆, 🎖️, 😵💫, etc) antes de aplicar o novo
         clean_current = utils.strip_rank_prefix(member.display_name)
         
         if prefix: new_nick = f"{prefix} {clean_current}"
