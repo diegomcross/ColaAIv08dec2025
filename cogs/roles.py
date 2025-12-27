@@ -88,24 +88,24 @@ class RolesManager(commands.Cog):
             h7 = valid_hours_map.get(member.id, 0)
             target_rank = self.get_target_rank(member, h7)
             
-            # --- STAFF SKIP ---
+            # --- STAFF SKIP (FIXED) ---
             staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
             if any(r.id in staff_roles for r in member.roles):
+                # Opcional: Garante que staff não tenha cargos de rank
                 await self.remove_role(member, "ADEPTO ✨")
                 await self.remove_role(member, "LENDA ⚡")
                 continue
 
             if target_rank != 'MESTRE':
-                # Remove cargos incorretos
+                # Remove
                 if target_rank != 'ADEPTO': await self.remove_role(member, "ADEPTO ✨")
                 if target_rank != 'LENDA': await self.remove_role(member, "LENDA ⚡")
-                
-                # Limpeza legado
+                # Limpa legados
                 await self.remove_role(member, "ADEPTO ⚔️")
                 await self.remove_role(member, "VANGUARDA ⚡")
                 await self.remove_role(member, "LENDA 💠")
 
-                # Aplica novo
+                # Aplica
                 if target_rank == 'ADEPTO': await self.apply_role(member, "ADEPTO ✨", colors["ADEPTO ✨"])
                 elif target_rank == 'LENDA': await self.apply_role(member, "LENDA ⚡", colors["LENDA ⚡"])
 
@@ -119,8 +119,37 @@ class RolesManager(commands.Cog):
             
             if sum(1 for mins in days_activity.values() if mins >= 60) >= 5:
                 await self.apply_role(member, "Presente Sempre", discord.Color.green())
-            
-            # (Mantido o restante dos roles de comportamento)
+            else:
+                await self.remove_role(member, "Presente Sempre")
+
+            # Turista Check
+            total_mins_7d = sum(days_activity.values())
+            unique_days = len(days_activity)
+            if unique_days > 0 and unique_days <= 2 and total_mins_7d >= 60:
+                await self.apply_role(member, "Turista", discord.Color.orange())
+            else:
+                await self.remove_role(member, "Turista")
+
+            # Inativo Logic
+            monitoring_active = (datetime.datetime.now() - config.INACTIVITY_START_DATE).days >= 21
+            if monitoring_active:
+                last_seen_raw = await db.get_last_activity_timestamp(member.id)
+                is_inactive = False
+                if last_seen_raw:
+                    try:
+                        last_seen = datetime.datetime.fromisoformat(str(last_seen_raw))
+                        if last_seen.tzinfo is None: last_seen = last_seen.replace(tzinfo=None)
+                        diff = (datetime.datetime.now() - last_seen).days
+                        if diff >= 21: is_inactive = True
+                    except: pass
+                
+                if is_inactive:
+                    if not member.get_role(config.ROLE_INATIVO):
+                        await self.apply_role(member, "Inativo", discord.Color.dark_grey()) # Usa nome ou ID
+                        try: await member.send("⚠️ **Aviso:** Inatividade detectada (3 semanas).")
+                        except: pass
+                else:
+                    await self.remove_role(member, "Inativo")
 
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
     async def nickname_update_loop(self):
@@ -134,6 +163,7 @@ class RolesManager(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
+            # --- STAFF SKIP (FIXED) ---
             staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
             if any(r.id in staff_roles for r in member.roles): 
                 continue
