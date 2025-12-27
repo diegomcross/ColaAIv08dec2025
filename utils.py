@@ -10,8 +10,6 @@ from constants import (
     RANK_STYLE
 )
 
-# --- UTILITÁRIOS DE USUÁRIO ---
-
 async def get_user_display_name_static(user_id: int, bot: discord.Client, guild: discord.Guild) -> str:
     if guild:
         member = guild.get_member(user_id)
@@ -22,61 +20,47 @@ async def get_user_display_name_static(user_id: int, bot: discord.Client, guild:
     except: return f"User"
 
 def clean_voter_name(display_name: str) -> str:
-    """Limpa discriminadores (#1234) e espaços."""
     if not display_name: return "User"
     name_part = display_name.split('#')[0]
     return name_part.strip() or "User"
 
 def strip_rank_prefix(display_name: str) -> str:
-    """
-    Remove agressivamente qualquer prefixo de rank (atual, legado ou bugado).
-    Impede o efeito 'Tower of Babel' (stacking de emojis).
-    """
-    # Lista de 'Lixo' para remover do início do nome
-    # Inclui versões quebradas vistas nos logs (😵💫), antigas e novas
+    # Kill list com os novos e velhos prefixos
     garbage_list = [
-        "🎖️ MESTRE", "🏆 MESTRE",
-        "⚡ LENDA", "⚡ VANGUARDA", "💠 LENDA",
-        "✨ ADEPTO", "⚔️ ADEPTO",
-        "🍌", "🟢",
-        "😵 TURISTA", "😵‍💫 TURISTA", "😵💫 TURISTA", "⚠️ TURISTA", "⚠ TURISTA",
-        "💤",
-        # Emojis soltos que podem ter sobrado de quebras
-        "😵", "💫", "⚠", "⚠️", "⚔️", "✨", "⚡", "🎖️", "🏆", "💠"
+        "🏆 O Mestre", "🎖️ MESTRE", "🏆 MESTRE",
+        "⚡O Lendário", "⚡ LENDA", "⚡ VANGUARDA", "💠 LENDA",
+        "✨ Adepto", "✨ ADEPTO", "⚔️ ADEPTO",
+        "👍", "🍌", "🟢",
+        "👎", "😵 TURISTA", "😵‍💫 TURISTA", "😵💫 TURISTA", "⚠️ TURISTA", "⚠ TURISTA",
+        "💤", "User",
+        # Emojis soltos
+        "🏆", "🎖️", "⚡", "✨", "⚔️", "👍", "👎", "😵", "💫", "⚠️", "⚠", "💤"
     ]
     
     clean = display_name.split('#')[0].strip()
     
-    # Loop de Limpeza Recursiva
-    # Continua limpando enquanto encontrar lixo no início
     changed = True
     while changed:
         changed = False
         for trash in garbage_list:
-            if clean.startswith(trash):
-                clean = clean[len(trash):].strip()
-                changed = True
-            # Fallback para casos onde o emoji colou no nome sem espaço
-            elif clean.startswith(trash.strip()):
-                clean = clean[len(trash.strip()):].strip()
+            if clean.lower().startswith(trash.lower()):
+                if clean.startswith(trash): clean = clean[len(trash):].strip()
+                else: clean = clean[len(trash):].strip()
                 changed = True
         
-        # Limpeza extra de caracteres não-alfanuméricos soltos no início (ex: "- ", "| ")
         if clean and not clean[0].isalnum():
             old_len = len(clean)
             clean = re.sub(r'^[^a-zA-Z0-9]+', '', clean).strip()
-            if len(clean) != old_len:
-                changed = True
+            if len(clean) != old_len: changed = True
     
     return clean if clean else "User"
-
-# --- UTILITÁRIOS DE DATA E EVENTO ---
 
 def format_datetime_for_embed(dt: datetime.datetime) -> Tuple[str, str]:
     ts = int(dt.timestamp())
     return f"<t:{ts}:f>", f"<t:{ts}:R>"
 
 async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance: discord.Client) -> discord.Embed:
+    # (Mantido igual ao anterior, apenas para integridade do arquivo)
     event_id = event_details.get('event_id', 'N/A')
     guild_id = event_details.get('guild_id')
     guild = bot_instance.get_guild(guild_id)
@@ -147,98 +131,70 @@ async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance:
     embed.set_footer(text=f"ID do Evento: {event_id}")
     return embed
 
-# --- PARSING E DETECÇÃO ---
-
+# --- PARSING E DETECÇÃO (Mantido igual) ---
 def normalize_date_str(date_str: str) -> str:
     text = date_str.lower()
-    replacements = {
-        r'\bterca\b': 'terça', r'\bterça\b': 'terça-feira',
-        r'\bsegunda\b': 'segunda-feira', r'\bquarta\b': 'quarta-feira',
-        r'\bquinta\b': 'quinta-feira', r'\bsexta\b': 'sexta-feira',
-        r'\bsabado\b': 'sábado', r'\bdomingo\b': 'domingo',
-        r'\bamanha\b': 'amanhã', r'\bhoje\b': 'hoje',
-    }
-    for pattern, repl in replacements.items():
-        text = re.sub(pattern, repl, text)
+    replacements = {r'\bterca\b': 'terça', r'\bterça\b': 'terça-feira', r'\bsegunda\b': 'segunda-feira', r'\bquarta\b': 'quarta-feira', r'\bquinta\b': 'quinta-feira', r'\bsexta\b': 'sexta-feira', r'\bsabado\b': 'sábado', r'\bdomingo\b': 'domingo', r'\bamanha\b': 'amanhã', r'\bhoje\b': 'hoje'}
+    for p, r in replacements.items(): text = re.sub(p, r, text)
     text = re.sub(r'(\d{1,2})[hH](?!\w)', r'\1:00', text)
     text = re.sub(r'(\d{1,2})[hH](\d{2})', r'\1:\2', text)
     return text
 
 def parse_human_date(date_str: str) -> Optional[datetime.datetime]:
     if not date_str: return None
-    clean_date_str = normalize_date_str(date_str)
+    clean = normalize_date_str(date_str)
     now = datetime.datetime.now(BR_TIMEZONE)
     settings = {'PREFER_DATES_FROM': 'future', 'RELATIVE_BASE': now.replace(tzinfo=None), 'TIMEZONE': 'America/Sao_Paulo', 'RETURN_AS_TIMEZONE_AWARE': True, 'DATE_ORDER': 'DMY', 'PREFER_DAY_OF_MONTH': 'current'}
-    dt = dateparser.parse(clean_date_str, settings=settings, languages=['pt'])
+    dt = dateparser.parse(clean, settings=settings, languages=['pt'])
     if not dt: return None
     if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
     if (dt - now).days > 180:
-        try_year_current = dt.replace(year=now.year)
-        if try_year_current > now: dt = try_year_current
+        try_y = dt.replace(year=now.year)
+        if try_y > now: dt = try_y
     return dt
 
 def detect_activity_details(user_input: str) -> Tuple[str, str, int]:
     text_lower = user_input.lower()
-    def check_match(catalog, type_name, default_slots):
-        for official_name, aliases in catalog.items():
-            if official_name.lower() in text_lower: 
-                return official_name, type_name, default_slots
-            for alias in aliases:
-                if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower):
-                    return official_name, type_name, default_slots
-        return None
-
-    match = check_match(RAID_INFO_PT, 'RAID', 6)
-    if match: return match
-    match = check_match(MASMORRA_INFO_PT, 'MASMORRA', 3)
-    if match: return match
-    match = check_match(PVP_ACTIVITY_INFO_PT, 'PVP', 3)
-    if match: return match
+    for official, aliases in RAID_INFO_PT.items():
+        if official.lower() in text_lower: return official, 'RAID', 6
+        for alias in aliases:
+            if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower): return official, 'RAID', 6
+    for official, aliases in MASMORRA_INFO_PT.items():
+        if official.lower() in text_lower: return official, 'MASMORRA', 3
+        for alias in aliases:
+            if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower): return official, 'MASMORRA', 3
+    for official, aliases in PVP_ACTIVITY_INFO_PT.items():
+        if official.lower() in text_lower: return official, 'PVP', 3
+        for alias in aliases:
+            if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower): return official, 'PVP', 3
     return user_input.strip().title(), 'OUTRO', None
 
 def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free_slots: int, description: str = "") -> str:
     emoji1 = ACTIVITY_EMOJIS.get(type_key, ACTIVITY_EMOJIS['OUTRO'])
     emoji2 = ""
-    search_text = (title + " " + description).lower()
-    for keyword, icon in ACTIVITY_MODES.items():
-        if keyword in search_text:
-            emoji2 = icon
-            break
-            
-    simple_name = title
-    if title in CHANNEL_NAME_MAPPINGS: simple_name = CHANNEL_NAME_MAPPINGS[title]
+    search = (title + " " + description).lower()
+    for kw, icon in ACTIVITY_MODES.items():
+        if kw in search: emoji2 = icon; break
+    simple = title
+    if title in CHANNEL_NAME_MAPPINGS: simple = CHANNEL_NAME_MAPPINGS[title]
     else:
-        for official_key, simple_val in CHANNEL_NAME_MAPPINGS.items():
-            if official_key.lower() in title.lower():
-                simple_name = simple_val
-                break
-    
-    clean_name = simple_name.lower().replace(' ', '-')
-    clean_name = ''.join(e for e in clean_name if e.isalnum() or e == '-' or e in ['à', 'á', 'â', 'ã', 'é', 'ê', 'í', 'ó', 'ô', 'õ', 'ú', 'ç']) 
-    
+        for k, v in CHANNEL_NAME_MAPPINGS.items():
+            if k.lower() in title.lower(): simple = v; break
+    clean = simple.lower().replace(' ', '-')
+    clean = ''.join(e for e in clean if e.isalnum() or e == '-' or e in ['à','á','â','ã','é','ê','í','ó','ô','õ','ú','ç'])
     now = datetime.datetime.now(BR_TIMEZONE)
-    days_diff = (dt.date() - now.date()).days
-    weekday = DIAS_SEMANA_PT_SHORT[dt.weekday()].lower()
-    
-    if days_diff < 7:
-        time_str = dt.strftime('%Hh%M').replace('h00', 'h')
-        slots_str = "lotado" if free_slots <= 0 else f"{free_slots}vagas"
-        name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{time_str}-{slots_str}"
-    else:
-        date_str = dt.strftime('%d-%m')
-        name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{date_str}"
-        
-    return name[:100]
+    if (dt.date() - now.date()).days < 7:
+        ts = dt.strftime('%Hh%M').replace('h00', 'h')
+        slots = "lotado" if free_slots <= 0 else f"{free_slots}vagas"
+        return f"{emoji1}{emoji2}{clean}-{DIAS_SEMANA_PT_SHORT[dt.weekday()].lower()}-{ts}-{slots}"[:100]
+    return f"{emoji1}{emoji2}{clean}-{DIAS_SEMANA_PT_SHORT[dt.weekday()].lower()}-{dt.strftime('%d-%m')}"[:100]
 
 def format_activity_name(raw_name: str) -> str:
-    official_name, type_key, _ = detect_activity_details(raw_name)
+    official, type_key, _ = detect_activity_details(raw_name)
     emoji1 = ACTIVITY_EMOJIS.get(type_key, "")
     emoji2 = ""
-    mode_str = ""
-    search_text = raw_name.lower()
-    for keyword, icon in ACTIVITY_MODES.items():
-        if keyword in search_text:
-            emoji2 = icon
-            mode_str = f" ({keyword.capitalize()})"
-            break
-    return f"{official_name}{mode_str} {emoji1}{emoji2}".strip()
+    mode = ""
+    search = raw_name.lower()
+    for kw, icon in ACTIVITY_MODES.items():
+        if kw in search: emoji2 = icon; mode = f" ({kw.capitalize()})"; break
+    return f"{official}{mode} {emoji1}{emoji2}".strip()
