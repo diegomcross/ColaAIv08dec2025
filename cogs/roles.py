@@ -17,15 +17,13 @@ class RolesManager(commands.Cog):
         self.sync_loop.cancel()
         self.db_cleanup_loop.cancel()
 
-    # --- LISTENER DE STARTUP ---
     @commands.Cog.listener()
     async def on_ready(self):
         """Força atualização de cargos e nomes assim que o bot liga."""
         await self.bot.wait_until_ready()
-        print("[ROLES] Forçando sincronização inicial (Safe Mode)...")
+        print("[ROLES] Iniciando sincronização (Modo Seguro - Anti Rate Limit)...")
         await self.sync_member_ranks()
 
-    # --- LÓGICA CENTRALIZADA ---
     async def sync_member_ranks(self):
         if not self.bot.guilds: return
         guild = self.bot.get_guild(self.bot.guilds[0].id)
@@ -34,7 +32,6 @@ class RolesManager(commands.Cog):
         valid_hours_data = await db.get_voice_hours(7)
         valid_hours_map = {r['user_id']: r['total_mins']/60 for r in valid_hours_data}
         
-        # NOVAS CORES
         colors = {
             "ADEPTO ✨": discord.Color.red(),
             "LENDA ⚡": discord.Color.purple()
@@ -45,13 +42,11 @@ class RolesManager(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
-            # --- RATE LIMIT PROTECTION ---
-            # Pausa de 1.5s entre cada membro para evitar o erro 429
+            # --- CRÍTICO: DELAY PARA EVITAR 429 ---
             await asyncio.sleep(1.5)
 
-            # 1. IGNORAR STAFF (Renomear e Cargos)
+            # Ignora Staff (Opcional: Limpar cargos deles)
             if any(r.id in staff_roles for r in member.roles):
-                # Limpeza opcional de cargos de rank
                 await self.remove_role(member, "ADEPTO ✨")
                 await self.remove_role(member, "LENDA ⚡")
                 continue
@@ -59,28 +54,27 @@ class RolesManager(commands.Cog):
             h7 = valid_hours_map.get(member.id, 0)
             target_rank = self.get_target_rank(member, h7)
             
-            # 2. ATUALIZAR NOME (Prefixos)
+            # 1. ATUALIZAR NOME (Com Limpeza Profunda)
             await self.update_nickname(member, target_rank)
 
-            # 3. ATUALIZAR CARGOS
+            # 2. ATUALIZAR CARGOS
             if target_rank != 'MESTRE':
                 # Remove incorretos
                 if target_rank != 'ADEPTO': await self.remove_role(member, "ADEPTO ✨")
                 if target_rank != 'LENDA': await self.remove_role(member, "LENDA ⚡")
                 
-                # Limpa legado (se houver)
+                # Limpa legados
                 await self.remove_role(member, "ADEPTO ⚔️")
                 await self.remove_role(member, "VANGUARDA ⚡")
                 await self.remove_role(member, "LENDA 💠")
 
-                # Aplica
+                # Aplica novo
                 if target_rank == 'ADEPTO': await self.apply_role(member, "ADEPTO ✨", colors["ADEPTO ✨"])
                 elif target_rank == 'LENDA': await self.apply_role(member, "LENDA ⚡", colors["LENDA ⚡"])
 
-            # 4. COMPORTAMENTO (Presente/Inativo)
+            # 3. COMPORTAMENTO
             await self.check_behavior_roles(member)
 
-    # --- HELPERS ---
     async def check_behavior_roles(self, member):
         sessions_7d = await db.get_sessions_in_range(member.id, 7)
         days_activity = {}
@@ -89,13 +83,11 @@ class RolesManager(commands.Cog):
             except: continue
             days_activity[s_date] = days_activity.get(s_date, 0) + sess['duration_minutes']
         
-        # Presente Sempre
         if sum(1 for mins in days_activity.values() if mins >= 60) >= 5:
             await self.apply_role(member, "Presente Sempre", discord.Color.green())
         else:
             await self.remove_role(member, "Presente Sempre")
 
-        # Inativo
         monitoring_active = (datetime.datetime.now() - config.INACTIVITY_START_DATE).days >= 21
         if monitoring_active:
             last_seen = await db.get_last_activity_timestamp(member.id)
@@ -116,13 +108,13 @@ class RolesManager(commands.Cog):
         if member.id == member.guild.owner_id: return
         
         prefix = RANK_STYLE.get(rank_key, "")
-        # Usa o utilitário robusto para limpar o nome antigo
+        
+        # Limpa TUDO antes de aplicar o novo
         clean_current = utils.strip_rank_prefix(member.display_name)
         
         if prefix: new_nick = f"{prefix} {clean_current}"
         else: new_nick = clean_current
 
-        # Trunca se passar de 32 chars
         if len(new_nick) > 32:
             allowed = 31 - len(prefix)
             if allowed > 0: new_nick = f"{prefix} {clean_current[:allowed]}…"
@@ -157,7 +149,6 @@ class RolesManager(commands.Cog):
             try: await member.remove_roles(role)
             except: pass
 
-    # --- LOOP PRINCIPAL (1h e 8h) ---
     @tasks.loop(hours=1)
     async def sync_loop(self):
         await self.bot.wait_until_ready()
@@ -171,6 +162,5 @@ class RolesManager(commands.Cog):
     async def before_roles(self):
         await self.bot.wait_until_ready()
 
-# --- MISSING SETUP FUNCTION ADDED BELOW ---
 async def setup(bot):
     await bot.add_cog(RolesManager(bot))
