@@ -92,22 +92,21 @@ PVP_ACTIVITY_INFO_PT = {
 ALL_ACTIVITIES_PT = {**RAID_INFO_PT, **MASMORRA_INFO_PT, **PVP_ACTIVITY_INFO_PT}
 SIMILARITY_THRESHOLD = 0.75
 
-# --- NOVO SISTEMA DE RANKING ---
+# --- SISTEMA DE RANKING ---
 RANK_THRESHOLDS = {
-    'MESTRE': 20,
+    'MESTRE': 20, # Mantido apenas como referência interna/meta
     'ADEPTO': 15,
-    'LENDA': 10,     # Substitui Vanguarda
-    'ATIVO': 5,      # Novo patamar
+    'LENDA': 10,
+    'ATIVO': 5,
     'TURISTA': 2,
 }
 
-# Configuração de Estilo do Apelido (Prefixo)
 RANK_STYLE = {
     'MESTRE': "🏆 MESTRE",
     'ADEPTO': "⚔️ ADEPTO",
     'LENDA': "💠 LENDA",
-    'ATIVO': "🟢",         # Apenas Emoji
-    'TURISTA': "⚠️ TURISTA", # Emoji de Alerta
+    'ATIVO': "🍌",         # Alterado para Banana
+    'TURISTA': "⚠️ TURISTA",
     'INATIVO': "💤",
     'DEFAULT': ""
 }
