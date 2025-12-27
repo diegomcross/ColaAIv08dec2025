@@ -29,6 +29,7 @@ DISCORD_INVITE_LINK = "https://discord.gg/kspvTzNuuA"
 # Cargos que NÃO aparecem no Ranking (Staff)
 ROLE_FOUNDER_ID = 1362747097824100474
 ROLE_MOD_ID = 1362746553600839781
+ROLE_ADMIN_ID = 1371992100329230386 # Novo cargo Staff (Excluido do Ranking)
 
 # Cargos de Ranking (Estéticos/Conquista)
 ROLE_MESTRE_ID = 1443588317982621838
