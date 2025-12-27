@@ -101,13 +101,13 @@ RANK_THRESHOLDS = {
     'TURISTA': 0,
 }
 
-# --- ESTILO DOS NICKNAMES (Fix Clean) ---
+# --- ESTILO DOS NICKNAMES ---
 RANK_STYLE = {
     'MESTRE': "🎖️ MESTRE",
     'LENDA': "⚡ LENDA",
     'ADEPTO': "✨ ADEPTO",
     'ATIVO': "🍌",
-    'TURISTA': "😵‍💫 TURISTA",
+    'TURISTA': "😵 TURISTA",  # Emoji Único Corrigido
     'INATIVO': "💤",
     'DEFAULT': ""
 }
