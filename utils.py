@@ -28,16 +28,21 @@ def clean_voter_name(display_name: str) -> str:
     return name_part.strip() or "User"
 
 def strip_rank_prefix(display_name: str) -> str:
-    """Remove APENAS os prefixos de rank definidos em constants.py."""
-    clean = display_name
-    # Itera sobre os valores do RANK_STYLE (ex: "🍌 ", "⚡ LENDA ")
-    for prefix in RANK_STYLE.values():
-        if prefix and clean.startswith(prefix):
-            # Remove o prefixo e espaços extras resultantes
-            clean = clean[len(prefix):].strip()
-            break
-    # Remove discriminadores caso sobrem
-    return clean.split('#')[0].strip()
+    """Remove RECURSIVAMENTE todos os prefixos de rank conhecidos."""
+    clean = display_name.split('#')[0].strip() # Remove #1234 primeiro
+    
+    # Lista de prefixos para remover (inclui versões antigas se necessário)
+    prefixes_to_remove = list(RANK_STYLE.values()) + ["⚠️ TURISTA", "🟢", "⚔️ ADEPTO", "⚡ VANGUARDA"]
+    
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes_to_remove:
+            if prefix and clean.startswith(prefix):
+                clean = clean[len(prefix):].strip()
+                changed = True # Se mudou, repete o loop para pegar prefixos duplos
+    
+    return clean
 
 # --- UTILITÁRIOS DE DATA E EVENTO ---
 
