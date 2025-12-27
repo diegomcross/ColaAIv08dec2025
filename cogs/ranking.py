@@ -80,9 +80,12 @@ class RankingCog(commands.Cog):
         all_members_data = []
         for member in guild.members:
             if member.bot: continue
-            if any(r.id in [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID] for r in member.roles): continue
+            
+            # --- FILTRO STAFF ATUALIZADO ---
+            staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
+            if any(r.id in staff_roles for r in member.roles): 
+                continue
 
-            # Determina Rank (Chave Interna)
             if member.get_role(config.ROLE_INATIVO):
                 rank_key = 'INATIVO'
                 h7 = 0
@@ -96,7 +99,6 @@ class RankingCog(commands.Cog):
                 elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_key = 'ATIVO'
                 else: rank_key = 'TURISTA'
 
-            # Nome Limpo
             clean_name = utils.clean_voter_name(member.display_name)
             
             all_members_data.append({
@@ -107,7 +109,6 @@ class RankingCog(commands.Cog):
 
         all_members_data.sort(key=lambda x: x['h7'], reverse=True)
 
-        # Agrupamento
         ranks_config = {
             'MESTRE': [], 'LENDA': [], 'ADEPTO': [], 
             'ATIVO': [], 'TURISTA': [], 'INATIVO': []
@@ -117,7 +118,6 @@ class RankingCog(commands.Cog):
             k = p['rank_key']
             if k in ranks_config: ranks_config[k].append(p['name'])
 
-        # --- MAPA DE CABEÇALHOS DO BOARD (NOVOS EMOJIS) ---
         HEADERS_MAP = {
             'MESTRE': "🎖️ MESTRE",
             'LENDA': "⚡ LENDA",
@@ -127,10 +127,8 @@ class RankingCog(commands.Cog):
             'INATIVO': "💤 INATIVOS"
         }
 
-        # 4. Construção do Embed
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
         
-        # MESTRE (Destaque)
         masters = ranks_config['MESTRE']
         header_mestre = HEADERS_MAP['MESTRE']
         if masters:
@@ -139,7 +137,6 @@ class RankingCog(commands.Cog):
         else:
             embed.description = f"### {header_mestre}\n> *O trono está vazio...*"
 
-        # TIERS VERTICAIS (Elite)
         mid_tiers = ['LENDA', 'ADEPTO']
         for key in mid_tiers:
             names = ranks_config[key]
@@ -149,7 +146,6 @@ class RankingCog(commands.Cog):
         
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
-        # TIERS HORIZONTAIS (Comuns)
         low_tiers = ['ATIVO', 'TURISTA', 'INATIVO']
         for key in low_tiers:
             names = ranks_config[key]
