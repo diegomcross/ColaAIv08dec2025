@@ -3,7 +3,8 @@ from discord.ext import commands, tasks
 import database as db
 import config
 import datetime
-from constants import BR_TIMEZONE, RANK_THRESHOLDS
+import re
+from constants import BR_TIMEZONE, RANK_THRESHOLDS, RANK_STYLE
 
 class RolesManager(commands.Cog):
     def __init__(self, bot):
@@ -15,55 +16,62 @@ class RolesManager(commands.Cog):
         self.roles_check_loop.cancel()
         self.db_cleanup_loop.cancel()
 
-    async def apply_role(self, member, role_id):
-        if not member.get_role(role_id):
-            role = member.guild.get_role(role_id)
-            if role: 
-                try: await member.add_roles(role)
-                except: pass
-
-    async def remove_role(self, member, role_id):
-        if member.get_role(role_id):
-            role = member.guild.get_role(role_id)
-            if role:
-                try: await member.remove_roles(role)
-                except: pass
-
-    async def ensure_cosmetic_roles_exist(self, guild):
-        needed = {
-            "ADEPTO ⚔️": discord.Color.red(),
-            "VANGUARDA ⚡": discord.Color.blue()
-        }
-        for name, color in needed.items():
-            found = discord.utils.get(guild.roles, name=name)
-            if not found:
-                try: await guild.create_role(name=name, color=color, hover=True, reason="Auto-Criação ColaAI")
-                except: pass
-
-    async def manage_cosmetic_ranks(self, member, hours_7d):
-        """Gerencia Adepto e Vanguarda (Mestre agora é semanal/fixo)."""
+    async def apply_role(self, member, role_name, color=discord.Color.default()):
+        """Busca role pelo nome, cria se não existir e aplica."""
         guild = member.guild
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            try: role = await guild.create_role(name=role_name, color=color, hover=True, reason="Auto-Criação ColaAI")
+            except: return None
         
-        r_adepto = discord.utils.get(guild.roles, name="ADEPTO ⚔️")
-        r_vanguarda = discord.utils.get(guild.roles, name="VANGUARDA ⚡")
+        if role and role not in member.roles:
+            try: await member.add_roles(role)
+            except: pass
+        return role
+
+    async def remove_role(self, member, role_name):
+        role = discord.utils.get(member.guild.roles, name=role_name)
+        if role and role in member.roles:
+            try: await member.remove_roles(role)
+            except: pass
+
+    async def update_nickname(self, member, rank_key):
+        """Renomeia o membro com base no Rank (Ex: ⚔️ ADEPTO Nome)."""
+        # Ignora Dono do Servidor (Bot não tem permissão)
+        if member.id == member.guild.owner_id: return
+
+        # Pega o estilo do constants.py
+        prefix = RANK_STYLE.get(rank_key, "")
         
-        id_adepto = r_adepto.id if r_adepto else 0
-        id_vanguarda = r_vanguarda.id if r_vanguarda else 0
+        # Limpa apelido atual (remove emojis/títulos antigos para não duplicar)
+        # Regex busca padrões como "⚔️ ADEPTO ", "🟢 ", "⚠️ TURISTA "
+        current_name = member.display_name
+        
+        # Remove prefixos conhecidos
+        for p in RANK_STYLE.values():
+            if p and current_name.startswith(p):
+                current_name = current_name.replace(p, "").strip()
+                break # Removeu um, para
+        
+        # Monta novo nome
+        if prefix:
+            new_nick = f"{prefix} {current_name}"
+        else:
+            new_nick = current_name # Sem rank (ex: staff ou bug)
 
-        # Remove ranks para recalcular
-        if r_adepto: await self.remove_role(member, id_adepto)
-        if r_vanguarda: await self.remove_role(member, id_vanguarda)
+        # Trunca para 32 caracteres (limite do Discord)
+        if len(new_nick) > 32:
+            # Tenta preservar o prefixo e cortar o nome
+            allowed_len = 31 - len(prefix)
+            if allowed_len > 0:
+                new_nick = f"{prefix} {current_name[:allowed_len]}…"
+            else:
+                new_nick = new_nick[:32] # Prefixo gigante? Corta tudo.
 
-        # Se o membro JÁ TEM Mestre (ganhou na sexta), não damos Adepto/Vanguarda (Mestre é superior)
-        if member.get_role(config.ROLE_MESTRE_ID):
-            return
-
-        target_role_id = None
-        if hours_7d >= RANK_THRESHOLDS['ADEPTO']: target_role_id = id_adepto
-        elif hours_7d >= RANK_THRESHOLDS['VANGUARDA']: target_role_id = id_vanguarda
-
-        if target_role_id:
-            await self.apply_role(member, target_role_id)
+        # Aplica apenas se mudou
+        if member.display_name != new_nick:
+            try: await member.edit(nick=new_nick)
+            except: pass # Falta de permissão ou hierarquia
 
     @tasks.loop(hours=1)
     async def roles_check_loop(self):
@@ -71,25 +79,69 @@ class RolesManager(commands.Cog):
         guild = self.bot.get_guild(self.bot.guilds[0].id)
         if not guild: return
 
-        await self.ensure_cosmetic_roles_exist(guild)
-        
         valid_hours_data = await db.get_voice_hours(7)
         valid_hours_map = {r['user_id']: r['total_mins']/60 for r in valid_hours_data}
         
         monitoring_active = (datetime.datetime.now() - config.INACTIVITY_START_DATE).days >= 21
         
+        # Cores dos Cargos
+        colors = {
+            "ADEPTO ⚔️": discord.Color.red(),
+            "LENDA 💠": discord.Color.purple(), # Substitui Vanguarda
+            "ATIVO": discord.Color.green(),     # Opcional se quiser cargo
+            "TURISTA": discord.Color.light_grey()
+        }
+
+        # Remove cargo antigo Vanguarda se existir e ninguém mais usar
+        old_role = discord.utils.get(guild.roles, name="VANGUARDA ⚡")
+        # (Opcional: deletar ou deixar como legado)
+
         for member in guild.members:
             if member.bot: continue
             
-            # 1. Cargos Estéticos (Sem Mestre)
-            h7_valid = valid_hours_map.get(member.id, 0)
-            await self.manage_cosmetic_ranks(member, h7_valid)
+            # --- CÁLCULO DE RANK ---
+            h7 = valid_hours_map.get(member.id, 0)
+            target_rank = 'TURISTA' # Base
 
-            # 2. Comportamento
+            if member.get_role(config.ROLE_INATIVO):
+                target_rank = 'INATIVO'
+            elif member.get_role(config.ROLE_MESTRE_ID):
+                target_rank = 'MESTRE' # Mestre tem imunidade visual
+            else:
+                # Hierarquia
+                if h7 >= RANK_THRESHOLDS['MESTRE']: target_rank = 'MESTRE' # Caso bug do weekly
+                elif h7 >= RANK_THRESHOLDS['ADEPTO']: target_rank = 'ADEPTO'
+                elif h7 >= RANK_THRESHOLDS['LENDA']: target_rank = 'LENDA'
+                elif h7 >= RANK_THRESHOLDS['ATIVO']: target_rank = 'ATIVO'
+                elif h7 >= RANK_THRESHOLDS['TURISTA']: target_rank = 'TURISTA'
+            
+            # --- GERENCIAMENTO DE CARGOS ---
+            # Removemos todos os cargos de rank "inferiores/conflitantes" para garantir apenas um
+            # (Exceto Mestre que é gerenciado pelo weekly.py)
+            if target_rank != 'MESTRE':
+                # Remove Adepto se não for
+                if target_rank != 'ADEPTO': await self.remove_role(member, "ADEPTO ⚔️")
+                # Remove Lenda se não for
+                if target_rank != 'LENDA': await self.remove_role(member, "LENDA 💠")
+                # Remove Vanguarda (Legado)
+                await self.remove_role(member, "VANGUARDA ⚡")
+
+                # Aplica o novo
+                if target_rank == 'ADEPTO': await self.apply_role(member, "ADEPTO ⚔️", colors["ADEPTO ⚔️"])
+                elif target_rank == 'LENDA': await self.apply_role(member, "LENDA 💠", colors["LENDA 💠"])
+                # Ativo e Turista geralmente não ganham cargos "Premium", mas se quiser, descomente:
+                # elif target_rank == 'ATIVO': await self.apply_role(member, "ATIVO", colors["ATIVO"])
+
+            # --- RENOMEAÇÃO (NICKNAME) ---
+            # Staff (Fundador/Mod) geralmente não deve ser renomeado automaticamente para não bugar
+            if not any(r.id in [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID] for r in member.roles):
+                await self.update_nickname(member, target_rank)
+
+            # --- ROLES DE COMPORTAMENTO (FDS, Presente, Inativo) ---
+            # (Mantido código original abaixo)
             sessions_7d = await db.get_sessions_in_range(member.id, 7)
             sessions_21d = await db.get_sessions_in_range(member.id, 21)
             
-            # Presente Sempre
             days_activity = {}
             for sess in sessions_7d:
                 s_date = sess['start_time'].split()[0]
@@ -100,19 +152,17 @@ class RolesManager(commands.Cog):
             else:
                 await self.remove_role(member, config.ROLE_PRESENTE_SEMPRE)
 
-            # Turista
             total_mins_7d = sum(days_activity.values())
             unique_days = len(days_activity)
+            # Regra Turista Role (Comportamental) != Rank Turista (Horas)
             if unique_days > 0 and unique_days <= 2 and total_mins_7d >= 60:
                 await self.apply_role(member, config.ROLE_TURISTA)
             else:
                 await self.remove_role(member, config.ROLE_TURISTA)
 
-            # FDS
             is_fds_player = False
             if sessions_21d:
-                weekday_mins = 0
-                weekend_mins = 0
+                weekday_mins = 0; weekend_mins = 0
                 for sess in sessions_21d:
                     try: st = datetime.datetime.fromisoformat(str(sess['start_time']))
                     except: continue
@@ -120,12 +170,10 @@ class RolesManager(commands.Cog):
                     else: weekday_mins += sess['duration_minutes']
                 if weekday_mins < 30 and weekend_mins >= 60: is_fds_player = True
             
-            if is_fds_player:
-                await self.apply_role(member, config.ROLE_GALERA_FDS)
-            else:
-                await self.remove_role(member, config.ROLE_GALERA_FDS)
+            if is_fds_player: await self.apply_role(member, config.ROLE_GALERA_FDS)
+            else: await self.remove_role(member, config.ROLE_GALERA_FDS)
 
-            # Inativo
+            # Inativo Logic
             if monitoring_active:
                 last_seen_raw = await db.get_last_activity_timestamp(member.id)
                 is_inactive = False
@@ -139,11 +187,9 @@ class RolesManager(commands.Cog):
                 
                 if is_inactive:
                     if not member.get_role(config.ROLE_INATIVO):
-                        await self.apply_role(member, config.ROLE_INATIVO)
+                        await self.apply_role(member, config.ROLE_INATIVO) # ID no config
                         try:
-                            await member.send("⚠️ **Aviso:** Você não participa de atividades há 3 semanas e foi marcado como Inativo.")
-                            chan = guild.get_channel(config.CHANNEL_MAIN_CHAT)
-                            if chan: await chan.send(f"💤 {member.mention} marcado como **Inativo**.")
+                            await member.send("⚠️ **Aviso:** Inatividade detectada (3 semanas).")
                         except: pass
                 else:
                     await self.remove_role(member, config.ROLE_INATIVO)
