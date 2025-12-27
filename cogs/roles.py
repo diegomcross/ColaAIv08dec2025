@@ -1,167 +1,218 @@
 import discord
-from discord.ext import commands, tasks
-import database as db
-import config
 import datetime
-from constants import BR_TIMEZONE, RANK_THRESHOLDS, RANK_STYLE
-import utils
+import dateparser
+import pytz
+import re
+from typing import Tuple, Optional
+from constants import (
+    BR_TIMEZONE, RAID_INFO_PT, MASMORRA_INFO_PT, PVP_ACTIVITY_INFO_PT,
+    DIAS_SEMANA_PT_SHORT, ACTIVITY_EMOJIS, ACTIVITY_MODES, CHANNEL_NAME_MAPPINGS,
+    RANK_STYLE
+)
 
-class RolesManager(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.sync_loop.start()
-        self.db_cleanup_loop.start()
+# --- UTILITÁRIOS DE USUÁRIO ---
 
-    def cog_unload(self):
-        self.sync_loop.cancel()
-        self.db_cleanup_loop.cancel()
+async def get_user_display_name_static(user_id: int, bot: discord.Client, guild: discord.Guild) -> str:
+    if guild:
+        member = guild.get_member(user_id)
+        if member: return member.display_name
+    try:
+        user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+        return user.display_name
+    except: return f"User"
 
-    # --- LISTENER DE STARTUP ---
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Força atualização de cargos e nomes assim que o bot liga."""
-        await self.bot.wait_until_ready()
-        print("[ROLES] Forçando sincronização inicial...")
-        await self.sync_member_ranks()
+def clean_voter_name(display_name: str) -> str:
+    """Limpa discriminadores (#1234) e espaços."""
+    if not display_name: return "User"
+    name_part = display_name.split('#')[0]
+    return name_part.strip() or "User"
 
-    # --- LÓGICA CENTRALIZADA ---
-    async def sync_member_ranks(self):
-        if not self.bot.guilds: return
-        guild = self.bot.get_guild(self.bot.guilds[0].id)
-        if not guild: return
+def strip_rank_prefix(display_name: str) -> str:
+    """Remove RECURSIVAMENTE todos os prefixos de rank conhecidos."""
+    clean = display_name.split('#')[0].strip() # Remove #1234 primeiro
+    
+    # Lista de prefixos para remover (inclui versões antigas se necessário)
+    prefixes_to_remove = list(RANK_STYLE.values()) + ["⚠️ TURISTA", "🟢", "⚔️ ADEPTO", "⚡ VANGUARDA"]
+    
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes_to_remove:
+            if prefix and clean.startswith(prefix):
+                clean = clean[len(prefix):].strip()
+                changed = True # Se mudou, repete o loop para pegar prefixos duplos
+    
+    return clean
 
-        valid_hours_data = await db.get_voice_hours(7)
-        valid_hours_map = {r['user_id']: r['total_mins']/60 for r in valid_hours_data}
-        
-        colors = {
-            "ADEPTO ✨": discord.Color.red(),
-            "LENDA ⚡": discord.Color.purple()
-        }
+# --- UTILITÁRIOS DE DATA E EVENTO ---
 
-        staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
+def format_datetime_for_embed(dt: datetime.datetime) -> Tuple[str, str]:
+    ts = int(dt.timestamp())
+    return f"<t:{ts}:f>", f"<t:{ts}:R>"
 
-        for member in guild.members:
-            if member.bot: continue
+async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance: discord.Client) -> discord.Embed:
+    event_id = event_details.get('event_id', 'N/A')
+    guild_id = event_details.get('guild_id')
+    guild = bot_instance.get_guild(guild_id)
+
+    act_type_db = event_details.get('activity_type', 'OUTRO')
+    color = discord.Color.blue()
+    if act_type_db == 'RAID': color = discord.Color.purple()
+    elif act_type_db == 'MASMORRA': color = discord.Color.orange()
+    elif act_type_db == 'PVP': color = discord.Color.red()
+
+    desc = f"**{event_details.get('description', '')}**"
+    embed = discord.Embed(title=event_details.get('title', 'Evento'), description=desc, color=color)
+
+    raw_date = event_details.get('date_time', event_details.get('date'))
+    if isinstance(raw_date, str):
+        try: dt_obj = datetime.datetime.fromisoformat(raw_date)
+        except: dt_obj = datetime.datetime.now()
+    else: dt_obj = raw_date
+    if dt_obj and dt_obj.tzinfo is None: dt_obj = BR_TIMEZONE.localize(dt_obj)
+
+    fmt_date, rel_time = format_datetime_for_embed(dt_obj)
+    embed.add_field(name="🗓️ Data e Hora", value=f"{fmt_date} ({rel_time})", inline=False)
+    
+    display_type = act_type_db.capitalize() if act_type_db else "Outro"
+    if act_type_db == 'RAID': display_type = "Incursão"
+    embed.add_field(name="🎮 Tipo", value=display_type, inline=True)
+
+    creator_id = event_details.get('creator_id')
+    creator_mention = f"<@{creator_id}>" if creator_id else "Desconhecido"
+    embed.add_field(name="👑 Organizador", value=creator_mention, inline=True)
+
+    vou_user_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'confirmed']
+    le_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'waitlist']
+    nv_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'absent']
+    tv_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'maybe']
+
+    max_a = event_details.get('max_slots', 0)
+    vou_names = []
+    for uid in vou_user_ids:
+        name = await get_user_display_name_static(uid, bot_instance, guild)
+        vou_names.append(name)
+    
+    vou_lines = []
+    if max_a > 0:
+        for i in range(max_a):
+            if i < len(vou_names): vou_lines.append(f"{i+1}. {vou_names[i]}")
+            else: vou_lines.append(f"{i+1}. _________")
+        vou_val = "\n".join(vou_lines)
+    else:
+        vou_val = "\n".join([f"{i+1}. {n}" for i, n in enumerate(vou_names)]) if vou_names else "Ninguém."
+
+    embed.add_field(name=f"✅ Confirmados ({len(vou_names)}/{max_a})", value=vou_val, inline=False)
+
+    if le_ids:
+        le_lines = [f"{i+1}. {await get_user_display_name_static(uid, bot_instance, guild)}" for i, uid in enumerate(le_ids)]
+        le_val = "\n".join(le_lines)
+        embed.add_field(name=f"⏳ Lista de Espera ({len(le_ids)})", value=le_val, inline=False)
+
+    if nv_ids:
+        nv_names = [await get_user_display_name_static(uid, bot_instance, guild) for uid in nv_ids]
+        embed.add_field(name=f"❌ Não vou ({len(nv_ids)})", value=", ".join(nv_names), inline=True)
+
+    if tv_ids:
+        tv_names = [await get_user_display_name_static(uid, bot_instance, guild) for uid in tv_ids]
+        embed.add_field(name=f"🔷 Talvez ({len(tv_ids)})", value=", ".join(tv_names), inline=True)
+
+    embed.add_field(name="ℹ️ Como Participar", value="Use os botões abaixo para confirmar presença. Se lotar, você vai para a fila de espera.", inline=False)
+    embed.set_footer(text=f"ID do Evento: {event_id}")
+    return embed
+
+# --- PARSING E DETECÇÃO ---
+
+def normalize_date_str(date_str: str) -> str:
+    text = date_str.lower()
+    replacements = {
+        r'\bterca\b': 'terça', r'\bterça\b': 'terça-feira',
+        r'\bsegunda\b': 'segunda-feira', r'\bquarta\b': 'quarta-feira',
+        r'\bquinta\b': 'quinta-feira', r'\bsexta\b': 'sexta-feira',
+        r'\bsabado\b': 'sábado', r'\bdomingo\b': 'domingo',
+        r'\bamanha\b': 'amanhã', r'\bhoje\b': 'hoje',
+    }
+    for pattern, repl in replacements.items():
+        text = re.sub(pattern, repl, text)
+    text = re.sub(r'(\d{1,2})[hH](?!\w)', r'\1:00', text)
+    text = re.sub(r'(\d{1,2})[hH](\d{2})', r'\1:\2', text)
+    return text
+
+def parse_human_date(date_str: str) -> Optional[datetime.datetime]:
+    if not date_str: return None
+    clean_date_str = normalize_date_str(date_str)
+    now = datetime.datetime.now(BR_TIMEZONE)
+    settings = {'PREFER_DATES_FROM': 'future', 'RELATIVE_BASE': now.replace(tzinfo=None), 'TIMEZONE': 'America/Sao_Paulo', 'RETURN_AS_TIMEZONE_AWARE': True, 'DATE_ORDER': 'DMY', 'PREFER_DAY_OF_MONTH': 'current'}
+    dt = dateparser.parse(clean_date_str, settings=settings, languages=['pt'])
+    if not dt: return None
+    if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
+    if (dt - now).days > 180:
+        try_year_current = dt.replace(year=now.year)
+        if try_year_current > now: dt = try_year_current
+    return dt
+
+def detect_activity_details(user_input: str) -> Tuple[str, str, int]:
+    text_lower = user_input.lower()
+    def check_match(catalog, type_name, default_slots):
+        for official_name, aliases in catalog.items():
+            if official_name.lower() in text_lower: 
+                return official_name, type_name, default_slots
+            for alias in aliases:
+                if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower):
+                    return official_name, type_name, default_slots
+        return None
+
+    match = check_match(RAID_INFO_PT, 'RAID', 6)
+    if match: return match
+    match = check_match(MASMORRA_INFO_PT, 'MASMORRA', 3)
+    if match: return match
+    match = check_match(PVP_ACTIVITY_INFO_PT, 'PVP', 3)
+    if match: return match
+    return user_input.strip().title(), 'OUTRO', None
+
+def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free_slots: int, description: str = "") -> str:
+    emoji1 = ACTIVITY_EMOJIS.get(type_key, ACTIVITY_EMOJIS['OUTRO'])
+    emoji2 = ""
+    search_text = (title + " " + description).lower()
+    for keyword, icon in ACTIVITY_MODES.items():
+        if keyword in search_text:
+            emoji2 = icon
+            break
             
-            # 1. IGNORAR STAFF (Renomear e Cargos)
-            if any(r.id in staff_roles for r in member.roles):
-                # Limpeza opcional
-                await self.remove_role(member, "ADEPTO ✨")
-                await self.remove_role(member, "LENDA ⚡")
-                continue
-
-            h7 = valid_hours_map.get(member.id, 0)
-            target_rank = self.get_target_rank(member, h7)
-            
-            # 2. ATUALIZAR NOME (Prefixos)
-            await self.update_nickname(member, target_rank)
-
-            # 3. ATUALIZAR CARGOS
-            if target_rank != 'MESTRE':
-                # Remove incorretos
-                if target_rank != 'ADEPTO': await self.remove_role(member, "ADEPTO ✨")
-                if target_rank != 'LENDA': await self.remove_role(member, "LENDA ⚡")
-                # Limpa legado
-                await self.remove_role(member, "ADEPTO ⚔️")
-                await self.remove_role(member, "VANGUARDA ⚡")
-                await self.remove_role(member, "LENDA 💠")
-
-                # Aplica
-                if target_rank == 'ADEPTO': await self.apply_role(member, "ADEPTO ✨", colors["ADEPTO ✨"])
-                elif target_rank == 'LENDA': await self.apply_role(member, "LENDA ⚡", colors["LENDA ⚡"])
-
-            # 4. COMPORTAMENTO (Presente/Inativo)
-            await self.check_behavior_roles(member)
-
-    # --- HELPERS ---
-    async def check_behavior_roles(self, member):
-        sessions_7d = await db.get_sessions_in_range(member.id, 7)
-        days_activity = {}
-        for sess in sessions_7d:
-            try: s_date = sess['start_time'].split()[0]
-            except: continue
-            days_activity[s_date] = days_activity.get(s_date, 0) + sess['duration_minutes']
+    simple_name = title
+    if title in CHANNEL_NAME_MAPPINGS: simple_name = CHANNEL_NAME_MAPPINGS[title]
+    else:
+        for official_key, simple_val in CHANNEL_NAME_MAPPINGS.items():
+            if official_key.lower() in title.lower():
+                simple_name = simple_val
+                break
+    
+    clean_name = simple_name.lower().replace(' ', '-')
+    clean_name = ''.join(e for e in clean_name if e.isalnum() or e == '-' or e in ['à', 'á', 'â', 'ã', 'é', 'ê', 'í', 'ó', 'ô', 'õ', 'ú', 'ç']) 
+    
+    now = datetime.datetime.now(BR_TIMEZONE)
+    days_diff = (dt.date() - now.date()).days
+    weekday = DIAS_SEMANA_PT_SHORT[dt.weekday()].lower()
+    
+    if days_diff < 7:
+        time_str = dt.strftime('%Hh%M').replace('h00', 'h')
+        slots_str = "lotado" if free_slots <= 0 else f"{free_slots}vagas"
+        name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{time_str}-{slots_str}"
+    else:
+        date_str = dt.strftime('%d-%m')
+        name = f"{emoji1}{emoji2}{clean_name}-{weekday}-{date_str}"
         
-        # Presente Sempre
-        if sum(1 for mins in days_activity.values() if mins >= 60) >= 5:
-            await self.apply_role(member, "Presente Sempre", discord.Color.green())
-        else:
-            await self.remove_role(member, "Presente Sempre")
+    return name[:100]
 
-        # Inativo
-        monitoring_active = (datetime.datetime.now() - config.INACTIVITY_START_DATE).days >= 21
-        if monitoring_active:
-            last_seen = await db.get_last_activity_timestamp(member.id)
-            if last_seen:
-                try:
-                    dt = datetime.datetime.fromisoformat(str(last_seen))
-                    if dt.tzinfo is None: dt = dt.replace(tzinfo=None)
-                    if (datetime.datetime.now() - dt).days >= 21:
-                        if not member.get_role(config.ROLE_INATIVO):
-                            await self.apply_role(member, "Inativo", discord.Color.dark_grey())
-                            try: await member.send("⚠️ **Aviso:** Inatividade detectada.")
-                            except: pass
-                    else:
-                        await self.remove_role(member, "Inativo")
-                except: pass
-
-    async def update_nickname(self, member, rank_key):
-        if member.id == member.guild.owner_id: return
-        
-        prefix = RANK_STYLE.get(rank_key, "")
-        # Usa o utilitário robusto para limpar o nome antigo
-        clean_current = utils.strip_rank_prefix(member.display_name)
-        
-        if prefix: new_nick = f"{prefix} {clean_current}"
-        else: new_nick = clean_current
-
-        if len(new_nick) > 32:
-            allowed = 31 - len(prefix)
-            if allowed > 0: new_nick = f"{prefix} {clean_current[:allowed]}…"
-            else: new_nick = new_nick[:32]
-
-        if member.display_name != new_nick:
-            try: await member.edit(nick=new_nick)
-            except: pass
-
-    def get_target_rank(self, member, h7):
-        if member.get_role(config.ROLE_INATIVO): return 'INATIVO'
-        if member.get_role(config.ROLE_MESTRE_ID): return 'MESTRE'
-        if h7 >= RANK_THRESHOLDS['LENDA']: return 'LENDA'
-        if h7 >= RANK_THRESHOLDS['ADEPTO']: return 'ADEPTO'
-        if h7 >= RANK_THRESHOLDS['ATIVO']: return 'ATIVO'
-        return 'TURISTA'
-
-    async def apply_role(self, member, role_name, color):
-        guild = member.guild
-        role = discord.utils.get(guild.roles, name=role_name)
-        if not role:
-            try: role = await guild.create_role(name=role_name, color=color, hover=True, reason="Auto-Criação")
-            except: return
-        if role and role not in member.roles:
-            try: await member.add_roles(role)
-            except: pass
-
-    async def remove_role(self, member, role_name):
-        role = discord.utils.get(member.guild.roles, name=role_name)
-        if role and role in member.roles:
-            try: await member.remove_roles(role)
-            except: pass
-
-    # --- LOOP PRINCIPAL (1h e 8h) ---
-    # Rodamos a cada hora para garantir, mas a lógica de Nickname é leve
-    @tasks.loop(hours=1)
-    async def sync_loop(self):
-        await self.bot.wait_until_ready()
-        await self.sync_member_ranks()
-
-    @tasks.loop(hours=24)
-    async def db_cleanup_loop(self):
-        await db.prune_old_voice_data(90)
-
-    @sync_loop.before_loop
-    async def before_roles(self):
-        await self.bot.wait_until_ready()
-
-async def setup(bot):
-    await bot.add_cog(RolesManager(bot))
+def format_activity_name(raw_name: str) -> str:
+    official_name, type_key, _ = detect_activity_details(raw_name)
+    emoji1 = ACTIVITY_EMOJIS.get(type_key, "")
+    emoji2 = ""
+    mode_str = ""
+    search_text = raw_name.lower()
+    for keyword, icon in ACTIVITY_MODES.items():
+        if keyword in search_text:
+            emoji2 = icon
+            mode_str = f" ({keyword.capitalize()})"
+            break
+    return f"{official_name}{mode_str} {emoji1}{emoji2}".strip()
