@@ -29,43 +29,44 @@ def clean_voter_name(display_name: str) -> str:
 
 def strip_rank_prefix(display_name: str) -> str:
     """
-    Remove agressivamente qualquer prefixo de rank (atual ou legado/bugado).
+    Remove agressivamente qualquer prefixo de rank (atual, legado ou bugado).
+    Impede o efeito 'Tower of Babel' (stacking de emojis).
     """
     # Lista de 'Lixo' para remover do início do nome
-    # Inclui versões quebradas, antigas e novas
+    # Inclui versões quebradas vistas nos logs (😵💫), antigas e novas
     garbage_list = [
-        "🎖️ MESTRE", "⚡ LENDA", "✨ ADEPTO", "🍌", "😵‍💫 TURISTA", "💤", 
-        "😵💫 TURISTA", "⚠ TURISTA", "⚠️ TURISTA", "⚔️ ADEPTO", "⚡ VANGUARDA", "💠 LENDA",
-        "🟢", "User", "Mestre", "Adepto", "Turista", "Lenda", "Vanguarda",
-        "😵", "💫", "⚠", "⚠️", "⚔️", "✨", "⚡" # Emojis soltos
+        "🎖️ MESTRE", "🏆 MESTRE",
+        "⚡ LENDA", "⚡ VANGUARDA", "💠 LENDA",
+        "✨ ADEPTO", "⚔️ ADEPTO",
+        "🍌", "🟢",
+        "😵 TURISTA", "😵‍💫 TURISTA", "😵💫 TURISTA", "⚠️ TURISTA", "⚠ TURISTA",
+        "💤",
+        # Emojis soltos que podem ter sobrado de quebras
+        "😵", "💫", "⚠", "⚠️", "⚔️", "✨", "⚡", "🎖️", "🏆", "💠"
     ]
     
     clean = display_name.split('#')[0].strip()
     
     # Loop de Limpeza Recursiva
-    # Continua limpando até que o nome não comece com nenhum lixo
+    # Continua limpando enquanto encontrar lixo no início
     changed = True
     while changed:
         changed = False
         for trash in garbage_list:
-            # Verifica se começa com o lixo (ignorando case para texto)
-            if clean.lower().startswith(trash.lower()):
-                # Remove o lixo (tamanho exato do que foi encontrado)
-                # Mas precisamos remover da string original para manter o Case do nome do usuário
-                if clean.startswith(trash):
-                    clean = clean[len(trash):].strip()
-                else:
-                    # Fallback para caso de case insensitive (raro em emojis, mas bom pra texto)
-                    clean = clean[len(trash):].strip()
+            if clean.startswith(trash):
+                clean = clean[len(trash):].strip()
+                changed = True
+            # Fallback para casos onde o emoji colou no nome sem espaço
+            elif clean.startswith(trash.strip()):
+                clean = clean[len(trash.strip()):].strip()
                 changed = True
         
-        # Limpeza extra de símbolos soltos no início que podem ter sobrado
+        # Limpeza extra de caracteres não-alfanuméricos soltos no início (ex: "- ", "| ")
         if clean and not clean[0].isalnum():
-            # Remove caracteres não alfanuméricos do início (ex: "- ", "| ")
+            old_len = len(clean)
             clean = re.sub(r'^[^a-zA-Z0-9]+', '', clean).strip()
-            # Se removeu algo, marca changed para verificar garbage_list de novo
-            # (ex: "- 🍌 Name" -> "🍌 Name" -> "Name")
-            # Mas cuidado com loop infinito, então só faz regex simples
+            if len(clean) != old_len:
+                changed = True
     
     return clean if clean else "User"
 
