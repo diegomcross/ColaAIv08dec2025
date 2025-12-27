@@ -56,6 +56,7 @@ CHANNEL_NAME_MAPPINGS = {
     "Crisol": "crisol"
 }
 
+# --- LISTAS DE ATIVIDADES ---
 RAID_INFO_PT = {
     "Queda do Rei": ["queda", "oryx", "king's fall", "kings fall", "kf"],
     "O Fim de Crota": ["crota", "fim de crota", "crota's end", "ce"],
@@ -91,21 +92,21 @@ PVP_ACTIVITY_INFO_PT = {
 ALL_ACTIVITIES_PT = {**RAID_INFO_PT, **MASMORRA_INFO_PT, **PVP_ACTIVITY_INFO_PT}
 SIMILARITY_THRESHOLD = 0.75
 
-# --- SISTEMA DE RANKING (AJUSTADO) ---
+# --- SISTEMA DE RANKING (ATUALIZADO) ---
 RANK_THRESHOLDS = {
     'MESTRE': 20,
-    'LENDA': 10,     # Substitui Vanguarda
-    'ADEPTO': 6,     # Reduzido de 15 para 6 (Acessível)
-    'ATIVO': 2,      # Reduzido de 5 para 2 (Menos Turistas)
-    'TURISTA': 0,    # Fallback (< 2h)
+    'LENDA': 10,
+    'ADEPTO': 6,
+    'ATIVO': 2,
+    'TURISTA': 0,
 }
 
-# --- ESTILO DOS NICKNAMES ---
+# --- ESTILO DOS NICKNAMES (NOVOS EMOJIS) ---
 RANK_STYLE = {
     'MESTRE': "🎖️ MESTRE",
     'LENDA': "⚡ LENDA",
     'ADEPTO': "✨ ADEPTO",
-    'ATIVO': "🍌",          # Apenas Emoji
+    'ATIVO': "🍌",
     'TURISTA': "😵‍💫 TURISTA",
     'INATIVO': "💤",
     'DEFAULT': ""
