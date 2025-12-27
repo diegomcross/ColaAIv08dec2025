@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 import database as db
 import datetime
 import asyncio
-from constants import BR_TIMEZONE, RANK_THRESHOLDS, RANK_STYLE
+from constants import BR_TIMEZONE, RANK_THRESHOLDS
 import config
 import utils
 
@@ -73,7 +73,7 @@ class RankingCog(commands.Cog):
                     await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
                     self.active_timers[user_id] = now
 
-        # 2. Coleta dados (7 Dias)
+        # 2. Coleta dados
         data_7d = await db.get_voice_hours(7)
         hours_map = {r['user_id']: r['total_mins']/60 for r in data_7d}
         
@@ -82,38 +82,34 @@ class RankingCog(commands.Cog):
             if member.bot: continue
             if any(r.id in [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID] for r in member.roles): continue
 
-            # LÓGICA ATUALIZADA: Mestre Exclusivo por Cargo
+            # Determina Rank (Chave Interna)
             if member.get_role(config.ROLE_INATIVO):
                 rank_key = 'INATIVO'
                 h7 = 0
             elif member.get_role(config.ROLE_MESTRE_ID):
-                # Somente quem tem o cargo vira Mestre aqui, independente das horas
                 rank_key = 'MESTRE'
                 h7 = hours_map.get(member.id, 0)
             else:
                 h7 = hours_map.get(member.id, 0)
-                # Removemos a verificação if h7 >= MESTRE. 
-                # Se tiver 100 horas mas não tem cargo, cai no Adepto.
-                if h7 >= RANK_THRESHOLDS['ADEPTO']: rank_key = 'ADEPTO'
-                elif h7 >= RANK_THRESHOLDS['LENDA']: rank_key = 'LENDA'
+                if h7 >= RANK_THRESHOLDS['LENDA']: rank_key = 'LENDA'
+                elif h7 >= RANK_THRESHOLDS['ADEPTO']: rank_key = 'ADEPTO'
                 elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_key = 'ATIVO'
-                elif h7 >= RANK_THRESHOLDS['TURISTA']: rank_key = 'TURISTA'
                 else: rank_key = 'TURISTA'
 
-            display_title = RANK_STYLE.get(rank_key, "")
+            # Nome Limpo
             clean_name = utils.clean_voter_name(member.display_name)
             
             all_members_data.append({
                 'name': clean_name, 
                 'h7': h7, 
-                'rank_key': rank_key, 
-                'display_title': display_title
+                'rank_key': rank_key
             })
 
         all_members_data.sort(key=lambda x: x['h7'], reverse=True)
 
+        # Agrupamento
         ranks_config = {
-            'MESTRE': [], 'ADEPTO': [], 'LENDA': [],
+            'MESTRE': [], 'LENDA': [], 'ADEPTO': [], 
             'ATIVO': [], 'TURISTA': [], 'INATIVO': []
         }
 
@@ -121,29 +117,43 @@ class RankingCog(commands.Cog):
             k = p['rank_key']
             if k in ranks_config: ranks_config[k].append(p['name'])
 
+        # --- MAPA DE CABEÇALHOS DO BOARD (NOVOS EMOJIS) ---
+        HEADERS_MAP = {
+            'MESTRE': "🎖️ MESTRE",
+            'LENDA': "⚡ LENDA",
+            'ADEPTO': "✨ ADEPTO",
+            'ATIVO': "🍌 ATIVOS",
+            'TURISTA': "😵‍💫 TURISTAS",
+            'INATIVO': "💤 INATIVOS"
+        }
+
         # 4. Construção do Embed
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
         
+        # MESTRE (Destaque)
         masters = ranks_config['MESTRE']
+        header_mestre = HEADERS_MAP['MESTRE']
         if masters:
             master_str = "\n".join([f"> 👑 **{name}**" for name in masters])
-            embed.description = f"### {RANK_STYLE['MESTRE']}\n{master_str}"
+            embed.description = f"### {header_mestre}\n{master_str}"
         else:
-            embed.description = f"### {RANK_STYLE['MESTRE']}\n> *O trono está vazio...*"
+            embed.description = f"### {header_mestre}\n> *O trono está vazio...*"
 
-        mid_tiers = ['ADEPTO', 'LENDA']
+        # TIERS VERTICAIS (Elite)
+        mid_tiers = ['LENDA', 'ADEPTO']
         for key in mid_tiers:
             names = ranks_config[key]
-            title = RANK_STYLE[key]
+            title = HEADERS_MAP[key]
             value = "\n".join([f"`{n}`" for n in names]) if names else "*Vazio*"
             embed.add_field(name=f"{title} ({len(names)})", value=value, inline=True)
         
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
+        # TIERS HORIZONTAIS (Comuns)
         low_tiers = ['ATIVO', 'TURISTA', 'INATIVO']
         for key in low_tiers:
             names = ranks_config[key]
-            title = RANK_STYLE[key]
+            title = HEADERS_MAP[key]
             if names:
                 formatted_names = [f"`{n}`" for n in names]
                 value = ", ".join(formatted_names)
