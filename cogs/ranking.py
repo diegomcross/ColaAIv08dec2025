@@ -21,7 +21,6 @@ class RankingCog(commands.Cog):
     async def on_ready(self):
         await self.bot.wait_until_ready()
         
-        # --- FIX: AUTO-RESUME TRACKING ---
         now = datetime.datetime.now(BR_TIMEZONE)
         restored_count = 0
         
@@ -65,8 +64,6 @@ class RankingCog(commands.Cog):
             start_time = self.active_timers.pop(user_id)
             duration = (now - start_time).total_seconds() / 60
             if duration >= 1:
-                # Log as potentially valid; validity checked by analysis usually, 
-                # but defaulting to 1 (valid) here for basic tracking continuity
                 await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=1)
 
     @commands.Cog.listener()
@@ -80,7 +77,6 @@ class RankingCog(commands.Cog):
 
         now = datetime.datetime.now(BR_TIMEZONE)
         
-        # 1. Sincroniza parciais
         for user_id, start_time in list(self.active_timers.items()):
             member = guild.get_member(user_id)
             if member and member.voice:
@@ -90,7 +86,6 @@ class RankingCog(commands.Cog):
                     await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
                     self.active_timers[user_id] = now
 
-        # 2. Coleta dados
         data_7d = await db.get_voice_hours(7)
         hours_map = {r['user_id']: r['total_mins']/60 for r in data_7d}
         
@@ -98,13 +93,11 @@ class RankingCog(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
-            # --- FILTRO STAFF ---
             staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
             if any(r.id in staff_roles for r in member.roles): 
                 continue
 
-            # Determina Rank
-            if member.get_role(config.ROLE_INATIVO):
+            if member.get_role(config.ROLE_INATIVO_ID):
                 rank_key = 'INATIVO'
                 h7 = 0
             elif member.get_role(config.ROLE_MESTRE_ID):
@@ -117,9 +110,7 @@ class RankingCog(commands.Cog):
                 elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_key = 'ATIVO'
                 else: rank_key = 'TURISTA'
 
-            # Nome Limpo
-            clean_name = utils.clean_voter_name(member.display_name)
-            clean_name = utils.strip_rank_prefix(clean_name)
+            clean_name = utils.strip_rank_prefix(member.display_name)
             
             all_members_data.append({
                 'name': clean_name, 
@@ -138,14 +129,14 @@ class RankingCog(commands.Cog):
             k = p['rank_key']
             if k in ranks_config: ranks_config[k].append(p['name'])
 
-        # --- CABEÇALHOS DO BOARD (UPDATED) ---
+        # --- NOVOS CABEÇALHOS DO BOARD ---
         HEADERS_MAP = {
-            'MESTRE': "🏆 MESTRE", # Changed to Trophy
-            'LENDA': "⚡ LENDA",
-            'ADEPTO': "✨ ADEPTO",
-            'ATIVO': "🍌 ATIVOS",
-            'TURISTA': "😵 TURISTAS",
-            'INATIVO': "💤 INATIVOS"
+            'MESTRE': "🏆 O Mestre",
+            'LENDA': "⚡ Os Lendários",
+            'ADEPTO': "✨ Os Adeptos",
+            'ATIVO': "👍 Ativos",
+            'TURISTA': "👎 Os Turistas",
+            'INATIVO': "💤 Inativos"
         }
 
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
@@ -159,7 +150,7 @@ class RankingCog(commands.Cog):
         else:
             embed.description = f"### {header_mestre}\n> *O trono está vazio...*"
 
-        # TIERS INTERMEDIÁRIOS (Side by Side)
+        # VERTICAL (Lendários e Adeptos)
         mid_tiers = ['LENDA', 'ADEPTO']
         for key in mid_tiers:
             names = ranks_config[key]
@@ -170,7 +161,7 @@ class RankingCog(commands.Cog):
         
         embed.add_field(name="\u200b", value="\u200b", inline=False) # Spacer
 
-        # TIERS INFERIORES (Side by Side)
+        # HORIZONTAL (Ativos e Turistas)
         low_tiers = ['ATIVO', 'TURISTA']
         for key in low_tiers:
             names = ranks_config[key]
