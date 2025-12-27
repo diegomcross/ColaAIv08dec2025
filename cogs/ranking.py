@@ -81,11 +81,12 @@ class RankingCog(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
-            # --- FILTRO STAFF ATUALIZADO ---
+            # --- FILTRO STAFF ---
             staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
             if any(r.id in staff_roles for r in member.roles): 
                 continue
 
+            # Determina Rank
             if member.get_role(config.ROLE_INATIVO):
                 rank_key = 'INATIVO'
                 h7 = 0
@@ -118,6 +119,7 @@ class RankingCog(commands.Cog):
             k = p['rank_key']
             if k in ranks_config: ranks_config[k].append(p['name'])
 
+        # --- CABEÇALHOS DO BOARD ---
         HEADERS_MAP = {
             'MESTRE': "🎖️ MESTRE",
             'LENDA': "⚡ LENDA",
@@ -129,6 +131,7 @@ class RankingCog(commands.Cog):
 
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
         
+        # MESTRE
         masters = ranks_config['MESTRE']
         header_mestre = HEADERS_MAP['MESTRE']
         if masters:
@@ -137,6 +140,7 @@ class RankingCog(commands.Cog):
         else:
             embed.description = f"### {header_mestre}\n> *O trono está vazio...*"
 
+        # VERTICAL (Elite)
         mid_tiers = ['LENDA', 'ADEPTO']
         for key in mid_tiers:
             names = ranks_config[key]
@@ -146,6 +150,7 @@ class RankingCog(commands.Cog):
         
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
+        # HORIZONTAL (Comuns)
         low_tiers = ['ATIVO', 'TURISTA', 'INATIVO']
         for key in low_tiers:
             names = ranks_config[key]
