@@ -15,7 +15,7 @@ from cogs.views_polls import VotingPollView
 
 LORE_STATE_FILE = "lore_state.json"
 
-# --- VIEW: PROBATION DECISION (Mantida) ---
+# --- VIEW: PROBATION DECISION ---
 class ProbationDecisionView(ui.View):
     def __init__(self, bot, member_id):
         super().__init__(timeout=None)
@@ -45,14 +45,17 @@ class ProbationDecisionView(ui.View):
 class TasksCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        
+        # Inicia Loops
         self.cleanup_loop.start()
-        self.reminders_loop.start()
+        self.reminders_loop.start() # Agora controla DMs e Status
         self.channel_rename_loop.start()
         self.daily_morning_loop.start()
         self.daily_lore_loop.start()
         self.attendance_monitor_loop.start()
         self.auto_survey_loop.start()
         self.probation_monitor_loop.start()
+        
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.start()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.start()
 
@@ -68,7 +71,7 @@ class TasksCog(commands.Cog):
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.cancel()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.cancel()
 
-    # --- MÉTODOS MANTIDOS (Lore/Morning/Survey/Reminders) ---
+    # --- ESTADO LORE ---
     def get_lore_index(self):
         if not os.path.exists(LORE_STATE_FILE): return 0
         try:
@@ -77,7 +80,7 @@ class TasksCog(commands.Cog):
     def increment_lore_index(self):
         current = self.get_lore_index()
         with open(LORE_STATE_FILE, "w") as f: json.dump({"next_index": current + 1}, f)
-        
+
     @tasks.loop(time=datetime.time(hour=10, minute=0, tzinfo=BR_TIMEZONE))
     async def auto_survey_loop(self):
         await self.bot.wait_until_ready()
@@ -122,41 +125,130 @@ class TasksCog(commands.Cog):
         idx = self.get_lore_index()
         if chan and idx < len(quotes.LORE_QUOTES): await chan.send(f"{quotes.LORE_QUOTES[idx]}"); self.increment_lore_index()
 
+    # --- LOOP: LEMBRETES, DMs E STATUS INTELIGENTE ---
     @tasks.loop(minutes=1)
     async def reminders_loop(self):
         await self.bot.wait_until_ready()
         events = await db.get_active_events()
         now = datetime.datetime.now(BR_TIMEZONE)
+        
+        next_event = None
+        min_diff = float('inf')
+
         for event in events:
             try:
+                # Parse Tempo
                 if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
+                
                 diff_minutes = (evt_time - now).total_seconds() / 60
+                
+                # --- LOGICA DE STATUS (Pega o evento futuro mais próximo) ---
+                if 0 < diff_minutes < min_diff:
+                    min_diff = diff_minutes
+                    next_event = (event['title'], diff_minutes)
+
+                # --- CARREGA DADOS DO EVENTO ---
                 lifecycle = await db.get_event_lifecycle(event['event_id'])
-                if not lifecycle: await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 0); lifecycle = {'reminder_1h_sent': 0, 'reminder_4h_sent': 0, 'reminder_24h_sent': 0}
+                if not lifecycle: 
+                    await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 0)
+                    lifecycle = {'reminder_1h_sent': 0, 'reminder_4h_sent': 0, 'reminder_24h_sent': 0, 'start_alert_sent': 0}
+
                 guild = self.bot.get_guild(event['guild_id'])
                 if not guild: continue
+                
                 rsvps = await db.get_rsvps(event['event_id'])
-                confirmed_count = len([r for r in rsvps if r['status'] == 'confirmed'])
-                slots = event['max_slots']; has_slots = confirmed_count < slots
+                confirmed_users = [r['user_id'] for r in rsvps if r['status'] == 'confirmed']
+                maybe_users = [r['user_id'] for r in rsvps if r['status'] == 'maybe']
+                confirmed_count = len(confirmed_users)
+                
+                slots = event['max_slots']
+                has_slots = confirmed_count < slots
+                
                 main_chat = guild.get_channel(config.CHANNEL_MAIN_CHAT)
                 event_channel = guild.get_channel(event['channel_id'])
                 role = guild.get_role(event['role_id'])
+
+                # --- 1. NOTIFICAÇÃO DE 24H (PÚBLICA) ---
                 if 1430 <= diff_minutes <= 1450 and has_slots:
                      if not lifecycle.get('reminder_24h_sent'):
                          if main_chat: await main_chat.send(f"📢 **Atenção Guardiões!**\nA atividade **{event['title']}** é amanhã! Ainda há **{slots - confirmed_count} vagas**. Garanta a sua em {event_channel.mention}")
                          await db.set_lifecycle_flag(event['event_id'], 'reminder_24h_sent', 1)
+
+                # --- 2. NOTIFICAÇÃO DE 4H (PÚBLICA) ---
                 if 235 <= diff_minutes <= 245 and has_slots:
                     if not lifecycle.get('reminder_4h_sent'):
                         if main_chat: await main_chat.send(f"📢 **Vagas Abertas!** A atividade **{event['title']}** começa em 4 horas e ainda tem {slots - confirmed_count} vagas! \nCorre lá: {event_channel.mention}")
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_4h_sent', 1)
+
+                # --- 3. WAKE UP CALL - 1 HORA (DM + PÚBLICA) ---
                 if 50 <= diff_minutes <= 65:
                     if not lifecycle.get('reminder_1h_sent'):
-                        if event_channel and role: await event_channel.send(f"{role.mention} ⏰ O evento começa em 1 hora! Preparem-se.")
-                        if has_slots and main_chat: await main_chat.send(f"⚠️ **Última Chamada!** **{event['title']}** começa em 1h e precisa de gente! {event_channel.mention}")
+                        # Canal do Evento
+                        if event_channel and role: 
+                            await event_channel.send(f"{role.mention} ⏰ O evento começa em 1 hora! Preparem-se.")
+                        
+                        # Chat Principal (se tiver vaga)
+                        if has_slots and main_chat: 
+                            await main_chat.send(f"⚠️ **Última Chamada!** **{event['title']}** começa em 1h e precisa de gente! {event_channel.mention}")
+                        
+                        # DM DIRETA (Wake Up) - Para Confirmados e Talvez
+                        targets = set(confirmed_users + maybe_users)
+                        for uid in targets:
+                            try:
+                                member = guild.get_member(uid)
+                                if member:
+                                    embed_dm = discord.Embed(
+                                        title=f"⏰ Lembrete: {event['title']}",
+                                        description=f"A atividade começa em **1 hora**.\nPrepare seu loadout e fique atento!",
+                                        color=discord.Color.orange()
+                                    )
+                                    await member.send(embed=embed_dm)
+                            except: pass # DM fechada
+
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 1)
-            except: continue
+
+                # --- 4. SUMMONING - HORA DO SHOW (0 MINUTOS) ---
+                if -2 <= diff_minutes <= 5: # Janela pequena no start
+                    if not lifecycle.get('start_alert_sent'):
+                        # DM DIRETA (Summoning) - Apenas Confirmados
+                        for uid in confirmed_users:
+                            try:
+                                member = guild.get_member(uid)
+                                if member:
+                                    link = event_channel.jump_url if event_channel else "no Discord"
+                                    embed_dm = discord.Embed(
+                                        title=f"🚀 Hora do Show: {event['title']}",
+                                        description=f"A fireteam está se reunindo!\n\n**Entre agora:** [Canal da Atividade]({link})",
+                                        color=discord.Color.green()
+                                    )
+                                    await member.send(embed=embed_dm)
+                            except: pass
+
+                        await db.set_lifecycle_flag(event['event_id'], 'start_alert_sent', 1)
+
+            except Exception as e: continue
+
+        # --- ATUALIZAÇÃO DO STATUS (SMART PRESENCE) ---
+        try:
+            if next_event:
+                title, mins = next_event
+                
+                if mins > 60:
+                    hours = int(mins // 60)
+                    time_str = f"{hours}h"
+                else:
+                    time_str = f"{int(mins)}m"
+                
+                # Ex: "👀 Queda do Rei em 2h"
+                activity = discord.Activity(type=discord.ActivityType.watching, name=f"{title} em {time_str}")
+            else:
+                # Default
+                activity = discord.Activity(type=discord.ActivityType.custom, name="🛡️ Patrulhando a Torre")
+            
+            await self.bot.change_presence(activity=activity)
+        except: pass
 
     # --- MONITOR DE ATIVIDADE (STRICT RSVP) ---
     @tasks.loop(minutes=5)
@@ -191,7 +283,6 @@ class TasksCog(commands.Cog):
                         continue
 
                     # REGRA 3: Strict RSVP (Só conta para quem confirmou)
-                    # Ignora quem está na call mas não deu RSVP
                     valid_to_track = voice_members_ids.intersection(confirmed_ids)
                     
                     for uid in valid_to_track:
@@ -258,18 +349,15 @@ class TasksCog(commands.Cog):
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
             except: continue
             
-            # Encerra após 3h (Extendida levemente para bater os 5m de loop)
             if now > evt_time + datetime.timedelta(minutes=215):
                 guild = self.bot.get_guild(event['guild_id'])
                 if guild:
                     rsvps = await db.get_rsvps(event['event_id'])
                     confirmed_ids = {r['user_id'] for r in rsvps if r['status'] == 'confirmed'}
                     
-                    # REGRA 4: Filtro de 60 minutos
                     valid_attendees = await db.get_valid_attendees(event['event_id'], min_minutes=60)
                     valid_attendees_set = set(valid_attendees)
                     
-                    # Como só monitoramos RSVP'd, o grupo 'fill' será sempre vazio/irrelevante
                     users_present = confirmed_ids.intersection(valid_attendees_set)
                     users_flake = confirmed_ids.difference(valid_attendees_set)
 
@@ -289,9 +377,7 @@ class TasksCog(commands.Cog):
                             description=f"**Data:** {evt_time.strftime('%d/%m %H:%M')}\n**Critério:** Presença > 60min e RSVP confirmado.", 
                             color=discord.Color.blue()
                         )
-                        
                         embed_report.add_field(name=f"✅ Presentes ({len(users_present)})", value=format_clean(users_present), inline=False)
-                        
                         if users_flake:
                             embed_report.add_field(name=f"❌ Faltas / Incompletos ({len(users_flake)})", value=format_clean(users_flake), inline=False)
                         
