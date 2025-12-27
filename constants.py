@@ -101,13 +101,13 @@ RANK_THRESHOLDS = {
     'TURISTA': 0,
 }
 
-# --- ESTILO DOS NICKNAMES (UPDATED) ---
+# --- ESTILO DOS NICKNAMES (NOVOS TÍTULOS) ---
 RANK_STYLE = {
-    'MESTRE': "🏆 MESTRE",  # Changed to Trophy
-    'LENDA': "⚡ LENDA",
-    'ADEPTO': "✨ ADEPTO",
-    'ATIVO': "🍌",
-    'TURISTA': "😵 TURISTA",
+    'MESTRE': "🏆 O Mestre",
+    'LENDA': "⚡O Lendário",
+    'ADEPTO': "✨ Adepto",
+    'ATIVO': "👍",
+    'TURISTA': "👎",
     'INATIVO': "💤",
     'DEFAULT': ""
 }
