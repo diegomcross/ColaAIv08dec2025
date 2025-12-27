@@ -1,4 +1,3 @@
-# constants.py
 import pytz
 
 # --- Configurações de Fuso Horário ---
@@ -19,7 +18,6 @@ ACTIVITY_EMOJIS = {
 }
 
 # --- Emojis de Modo (Emoji 2) ---
-# O bot procurará estas palavras-chave na descrição/título
 ACTIVITY_MODES = {
     'escola': '🧑‍🏫',
     'ensinando': '🧑‍🏫',
@@ -32,9 +30,7 @@ ACTIVITY_MODES = {
 }
 
 # --- Mapeamento para Nomes de Canal Simplificados ---
-# De: Nome Oficial -> Para: Nome no Canal
 CHANNEL_NAME_MAPPINGS = {
-    # Raids
     "Queda do Rei": "oryx",
     "O Fim de Crota": "crota",
     "Câmara de Cristal": "câmara",
@@ -45,8 +41,6 @@ CHANNEL_NAME_MAPPINGS = {
     "Raiz dos Pesadelos": "raiz",
     "Limiar da Salvação": "limiar",
     "Deserto Perpétuo": "deserto",
-    
-    # Masmorras
     "Profecia": "profecia",
     "Trono Estilhaçado": "trono",
     "Poço da Heresia": "poço",
@@ -57,54 +51,63 @@ CHANNEL_NAME_MAPPINGS = {
     "Domínio de Vesper": "vesper",
     "Doutrina Apartada": "doutrina",
     "Equilíbrio": "equilibrio",
-    
-    # PvP
     "Desafios de Osíris": "osiris",
     "Bandeira de Ferro": "bandeira",
     "Crisol": "crisol"
 }
 
-# --- LISTAS DE ATIVIDADES PARA DETECÇÃO (PT-BR) ---
-
+# --- LISTAS DE ATIVIDADES ---
 RAID_INFO_PT = {
-    "Queda do Rei": ["queda", "oryx", "queda do rei", "king's fall", "kings fall", "kf"],
-    "O Fim de Crota": ["crota", "fim de crota", "crota's end", "crotas end", "ce"],
-    "Câmara de Cristal": ["camara", "câmara", "vog", "camara de cristal", "câmara de cristal", "vault of glass"],
+    "Queda do Rei": ["queda", "oryx", "king's fall", "kings fall", "kf"],
+    "O Fim de Crota": ["crota", "fim de crota", "crota's end", "ce"],
+    "Câmara de Cristal": ["camara", "câmara", "vog", "vault of glass"],
     "Último Desejo": ["riven", "ultimo desejo", "último desejo", "last wish", "lw"],
-    "Jardim da Salvação": ["jardim", "jardim da salvação", "garden", "garden of salvation", "gos"],
-    "Cripta da Pedra Profunda": ["cripta", "cripta da pedra", "dsc", "deep stone crypt"],
-    "Voto do Discípulo": ["voto", "discípulo", "voto do discípulo", "disciple", "vod", "vow of the disciple"],
-    "Raiz dos Pesadelos": ["raiz", "pesadelos", "raiz dos pesadelos", "ron", "root of nightmares"],
-    "Limiar da Salvação": ["limiar", "salvação", "limiar da salvação", "edge", "salvation's edge", "salvations edge"],
-    "Deserto Perpétuo": ["deserto", "perpetuo", "desert", "perpetual", "dp", "pd"]
+    "Jardim da Salvação": ["jardim", "garden", "gos"],
+    "Cripta da Pedra Profunda": ["cripta", "dsc", "deep stone crypt"],
+    "Voto do Discípulo": ["voto", "discípulo", "vod", "vow"],
+    "Raiz dos Pesadelos": ["raiz", "ron", "root"],
+    "Limiar da Salvação": ["limiar", "salvação", "edge", "salvation"],
+    "Deserto Perpétuo": ["deserto", "perpetuo", "perpetual"]
 }
 
 MASMORRA_INFO_PT = {
     "Profecia": ["profecia", "prophecy"],
-    "Trono Estilhaçado": ["trono", "trono estilhaçado", "estilhaçado", "shattered throne", "st"],
-    "Poço da Heresia": ["poço", "heresia", "poco", "poço da heresia", "pit of heresy", "pit", "poh"],
+    "Trono Estilhaçado": ["trono", "shattered"],
+    "Poço da Heresia": ["poço", "pit"],
     "Dualidade": ["dualidade", "duality"],
-    "Pináculo da Sentinela": ["pinaculo", "pináculo", "sentinela", "pináculo da sentinela", "spire", "spire of the watcher", "sotw"],
-    "Fantasmas das Profundezas": ["fantasmas", "profundezas", "fantasmas das profundezas", "ghosts", "ghosts of the deep", "gotd"],
-    "Ruína da Senhora da Guerra": ["ruina", "ruína", "senhora da guerra", "ruína da senhora da guerra", "warlord's ruin", "warlords ruin", "wr"],
-    "Domínio de Vesper": ["vesper", "domínio de vesper", "dominio de vesper"],
-    "Doutrina Apartada": ["doutrina", "apartada", "doutrina apartada", "sundered", "doctrine"],
-    "Equilíbrio": ["equilíbrio", "equilibrio", "equilibrium"]
+    "Pináculo da Sentinela": ["pinaculo", "spire"],
+    "Fantasmas das Profundezas": ["fantasmas", "ghosts"],
+    "Ruína da Senhora da Guerra": ["ruina", "warlord"],
+    "Domínio de Vesper": ["vesper"],
+    "Doutrina Apartada": ["doutrina", "sundered"],
+    "Equilíbrio": ["equilíbrio", "equilibrium"]
 }
 
 PVP_ACTIVITY_INFO_PT = {
-    "Desafios de Osíris": ["osiris", "desafios", "trials", "desafios de osíris", "trials of osiris"],
-    "Bandeira de Ferro": ["bandeira", "iron banner", "ib"],
-    "Crisol": ["crisol", "crucible", "pvp"]
+    "Desafios de Osíris": ["osiris", "trials"],
+    "Bandeira de Ferro": ["bandeira", "ib"],
+    "Crisol": ["crisol", "pvp"]
 }
 
 ALL_ACTIVITIES_PT = {**RAID_INFO_PT, **MASMORRA_INFO_PT, **PVP_ACTIVITY_INFO_PT}
 SIMILARITY_THRESHOLD = 0.75
 
+# --- NOVO SISTEMA DE RANKING ---
 RANK_THRESHOLDS = {
-    'MESTRE': 16,
-    'ADEPTO': 12,
-    'VANGUARDA': 8,
-    'ATIVO': 10,
-    'TURISTA': 6,
+    'MESTRE': 20,
+    'ADEPTO': 15,
+    'LENDA': 10,     # Substitui Vanguarda
+    'ATIVO': 5,      # Novo patamar
+    'TURISTA': 2,
+}
+
+# Configuração de Estilo do Apelido (Prefixo)
+RANK_STYLE = {
+    'MESTRE': "🏆 MESTRE",
+    'ADEPTO': "⚔️ ADEPTO",
+    'LENDA': "💠 LENDA",
+    'ATIVO': "🟢",         # Apenas Emoji
+    'TURISTA': "⚠️ TURISTA", # Emoji de Alerta
+    'INATIVO': "💤",
+    'DEFAULT': ""
 }
