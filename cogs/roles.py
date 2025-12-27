@@ -40,13 +40,13 @@ class RolesManager(commands.Cog):
         prefix = RANK_STYLE.get(rank_key, "")
         current_name = member.display_name
         
-        # Limpa prefixos antigos
+        # Remove prefixos antigos
         for p in RANK_STYLE.values():
             if p and current_name.startswith(p):
                 current_name = current_name.replace(p, "").strip()
                 break 
         
-        # Monta novo
+        # Aplica novo
         if prefix: new_nick = f"{prefix} {current_name}"
         else: new_nick = current_name
 
@@ -77,7 +77,6 @@ class RolesManager(commands.Cog):
         valid_hours_data = await db.get_voice_hours(7)
         valid_hours_map = {r['user_id']: r['total_mins']/60 for r in valid_hours_data}
         
-        # CORES DOS NOVOS CARGOS
         colors = {
             "ADEPTO ✨": discord.Color.red(),
             "LENDA ⚡": discord.Color.purple()
@@ -89,22 +88,28 @@ class RolesManager(commands.Cog):
             h7 = valid_hours_map.get(member.id, 0)
             target_rank = self.get_target_rank(member, h7)
             
-            # --- GERENCIAMENTO DE CARGOS ---
+            # --- STAFF SKIP ---
+            staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
+            if any(r.id in staff_roles for r in member.roles):
+                await self.remove_role(member, "ADEPTO ✨")
+                await self.remove_role(member, "LENDA ⚡")
+                continue
+
             if target_rank != 'MESTRE':
-                # Remove cargos que NÃO correspondem ao rank atual
+                # Remove cargos incorretos
                 if target_rank != 'ADEPTO': await self.remove_role(member, "ADEPTO ✨")
                 if target_rank != 'LENDA': await self.remove_role(member, "LENDA ⚡")
                 
-                # Remove versões antigas (limpeza)
+                # Limpeza legado
                 await self.remove_role(member, "ADEPTO ⚔️")
                 await self.remove_role(member, "VANGUARDA ⚡")
                 await self.remove_role(member, "LENDA 💠")
 
-                # Aplica o novo cargo correto
+                # Aplica novo
                 if target_rank == 'ADEPTO': await self.apply_role(member, "ADEPTO ✨", colors["ADEPTO ✨"])
                 elif target_rank == 'LENDA': await self.apply_role(member, "LENDA ⚡", colors["LENDA ⚡"])
 
-            # --- ROLES DE COMPORTAMENTO ---
+            # Comportamento
             sessions_7d = await db.get_sessions_in_range(member.id, 7)
             days_activity = {}
             for sess in sessions_7d:
@@ -113,10 +118,9 @@ class RolesManager(commands.Cog):
                 days_activity[s_date] = days_activity.get(s_date, 0) + sess['duration_minutes']
             
             if sum(1 for mins in days_activity.values() if mins >= 60) >= 5:
-                await self.apply_role(member, "Presente Sempre", discord.Color.green()) # Ou usar ID config
+                await self.apply_role(member, "Presente Sempre", discord.Color.green())
             
-            # (Mantém lógica de Turista/FDS/Inativo original ou via ID do config se preferir)
-            # Para simplificar, mantive o core de ranking atualizado
+            # (Mantido o restante dos roles de comportamento)
 
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
     async def nickname_update_loop(self):
@@ -129,7 +133,10 @@ class RolesManager(commands.Cog):
 
         for member in guild.members:
             if member.bot: continue
-            if any(r.id in [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID] for r in member.roles): continue
+            
+            staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
+            if any(r.id in staff_roles for r in member.roles): 
+                continue
 
             h7 = valid_hours_map.get(member.id, 0)
             target_rank = self.get_target_rank(member, h7)
