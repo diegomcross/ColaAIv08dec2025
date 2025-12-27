@@ -3,20 +3,10 @@ import datetime
 import dateparser
 import pytz
 import re
-from typing import Tuple, Optional, List, Dict
-from difflib import SequenceMatcher
-
+from typing import Tuple, Optional
 from constants import (
-    BR_TIMEZONE,
-    BRAZIL_TZ_STR,
-    RAID_INFO_PT,
-    MASMORRA_INFO_PT,
-    PVP_ACTIVITY_INFO_PT,
-    DIAS_SEMANA_PT_FULL,
-    DIAS_SEMANA_PT_SHORT,
-    ACTIVITY_EMOJIS,
-    ACTIVITY_MODES,
-    CHANNEL_NAME_MAPPINGS
+    BR_TIMEZONE, RAID_INFO_PT, MASMORRA_INFO_PT, PVP_ACTIVITY_INFO_PT,
+    DIAS_SEMANA_PT_SHORT, ACTIVITY_EMOJIS, ACTIVITY_MODES, CHANNEL_NAME_MAPPINGS
 )
 
 # --- UTILITÁRIOS DE USUÁRIO ---
@@ -31,11 +21,19 @@ async def get_user_display_name_static(user_id: int, bot: discord.Client, guild:
     except: return f"User"
 
 def clean_voter_name(display_name: str) -> str:
-    """Retorna apenas a primeira palavra, removendo números e símbolos."""
+    """
+    Limpa o nome para exibição (Ranking/Logs).
+    Mantém números e letras, remove apenas o discriminador (#1234) se houver.
+    """
     if not display_name: return "User"
-    first_word = display_name.split()[0]
-    # Regex: Mantém apenas letras (a-z) e caracteres acentuados comuns
-    cleaned = re.sub(r'[^a-zA-Z\u00C0-\u00FF]', '', first_word)
+    
+    # Remove discriminador clássico do Discord (ex: Nome#1234)
+    name_part = display_name.split('#')[0]
+    
+    # Remove espaços extras
+    cleaned = name_part.strip()
+    
+    # Se o nome ficou vazio (ex: só tinha espaços), usa um fallback ou o original
     return cleaned if cleaned else "User"
 
 # --- UTILITÁRIOS DE DATA E EVENTO ---
@@ -58,7 +56,6 @@ async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance:
     desc = f"**{event_details.get('description', '')}**"
     embed = discord.Embed(title=event_details.get('title', 'Evento'), description=desc, color=color)
 
-    # Tratamento robusto para data (suporta string ou objeto datetime)
     raw_date = event_details.get('date_time', event_details.get('date'))
     if isinstance(raw_date, str):
         try: dt_obj = datetime.datetime.fromisoformat(raw_date)
@@ -69,17 +66,14 @@ async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance:
     fmt_date, rel_time = format_datetime_for_embed(dt_obj)
     embed.add_field(name="🗓️ Data e Hora", value=f"{fmt_date} ({rel_time})", inline=False)
     
-    # Campo Tipo
     display_type = act_type_db.capitalize() if act_type_db else "Outro"
     if act_type_db == 'RAID': display_type = "Incursão"
     embed.add_field(name="🎮 Tipo", value=display_type, inline=True)
 
-    # Campo Organizador
     creator_id = event_details.get('creator_id')
     creator_mention = f"<@{creator_id}>" if creator_id else "Desconhecido"
     embed.add_field(name="👑 Organizador", value=creator_mention, inline=True)
 
-    # Listas de Presença
     vou_user_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'confirmed']
     le_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'waitlist']
     nv_ids = [r['user_id'] for r in rsvps_data if r['status'] == 'absent']
@@ -91,7 +85,6 @@ async def build_event_embed(event_details: dict, rsvps_data: list, bot_instance:
         name = await get_user_display_name_static(uid, bot_instance, guild)
         vou_names.append(name)
     
-    # Formatação das vagas (1. Nome / 2. _____)
     vou_lines = []
     if max_a > 0:
         for i in range(max_a):
@@ -133,7 +126,6 @@ def normalize_date_str(date_str: str) -> str:
     }
     for pattern, repl in replacements.items():
         text = re.sub(pattern, repl, text)
-    # 20h -> 20:00
     text = re.sub(r'(\d{1,2})[hH](?!\w)', r'\1:00', text)
     text = re.sub(r'(\d{1,2})[hH](\d{2})', r'\1:\2', text)
     return text
@@ -143,53 +135,35 @@ def parse_human_date(date_str: str) -> Optional[datetime.datetime]:
     clean_date_str = normalize_date_str(date_str)
     now = datetime.datetime.now(BR_TIMEZONE)
     settings = {'PREFER_DATES_FROM': 'future', 'RELATIVE_BASE': now.replace(tzinfo=None), 'TIMEZONE': 'America/Sao_Paulo', 'RETURN_AS_TIMEZONE_AWARE': True, 'DATE_ORDER': 'DMY', 'PREFER_DAY_OF_MONTH': 'current'}
-    
     dt = dateparser.parse(clean_date_str, settings=settings, languages=['pt'])
     if not dt: return None
-    
     if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
-    
-    # Se data > 6 meses, tenta ajustar ano (ex: input "01/01" em Dezembro não deve ir pra 2026)
     if (dt - now).days > 180:
         try_year_current = dt.replace(year=now.year)
         if try_year_current > now: dt = try_year_current
-            
     return dt
 
 def detect_activity_details(user_input: str) -> Tuple[str, str, int]:
     text_lower = user_input.lower()
-    
-    # Helper interno
     def check_match(catalog, type_name, default_slots):
         for official_name, aliases in catalog.items():
-            # Match exato no nome oficial
             if official_name.lower() in text_lower: 
                 return official_name, type_name, default_slots
-            # Match nos apelidos (aliases)
             for alias in aliases:
-                # Alias exato isolado ou parte da string
                 if f" {alias} " in f" {text_lower} " or (len(alias) > 3 and alias in text_lower):
                     return official_name, type_name, default_slots
         return None
 
-    # Tenta Raids
     match = check_match(RAID_INFO_PT, 'RAID', 6)
     if match: return match
-    
-    # Tenta Masmorras
     match = check_match(MASMORRA_INFO_PT, 'MASMORRA', 3)
     if match: return match
-    
-    # Tenta PvP
     match = check_match(PVP_ACTIVITY_INFO_PT, 'PVP', 3)
     if match: return match
-
-    # Padrão
     return user_input.strip().title(), 'OUTRO', None
 
 def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free_slots: int, description: str = "") -> str:
     emoji1 = ACTIVITY_EMOJIS.get(type_key, ACTIVITY_EMOJIS['OUTRO'])
-    
     emoji2 = ""
     search_text = (title + " " + description).lower()
     for keyword, icon in ACTIVITY_MODES.items():
@@ -198,8 +172,7 @@ def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free
             break
             
     simple_name = title
-    if title in CHANNEL_NAME_MAPPINGS:
-        simple_name = CHANNEL_NAME_MAPPINGS[title]
+    if title in CHANNEL_NAME_MAPPINGS: simple_name = CHANNEL_NAME_MAPPINGS[title]
     else:
         for official_key, simple_val in CHANNEL_NAME_MAPPINGS.items():
             if official_key.lower() in title.lower():
@@ -207,7 +180,6 @@ def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free
                 break
     
     clean_name = simple_name.lower().replace(' ', '-')
-    # Remove caracteres especiais mas mantém acentos pt-br principais para leitura
     clean_name = ''.join(e for e in clean_name if e.isalnum() or e == '-' or e in ['à', 'á', 'â', 'ã', 'é', 'ê', 'í', 'ó', 'ô', 'õ', 'ú', 'ç']) 
     
     now = datetime.datetime.now(BR_TIMEZONE)
@@ -225,23 +197,14 @@ def generate_channel_name(title: str, dt: datetime.datetime, type_key: str, free
     return name[:100]
 
 def format_activity_name(raw_name: str) -> str:
-    """
-    Transforma 'camara mestre' em 'Câmara de Cristal (Mestre) 💀⭐'
-    """
     official_name, type_key, _ = detect_activity_details(raw_name)
-    
     emoji1 = ACTIVITY_EMOJIS.get(type_key, "")
-    
     emoji2 = ""
     mode_str = ""
     search_text = raw_name.lower()
-    
     for keyword, icon in ACTIVITY_MODES.items():
         if keyword in search_text:
             emoji2 = icon
             mode_str = f" ({keyword.capitalize()})"
             break
-            
-    # Monta a string final
-    full_name = f"{official_name}{mode_str} {emoji1}{emoji2}".strip()
-    return full_name
+    return f"{official_name}{mode_str} {emoji1}{emoji2}".strip()
