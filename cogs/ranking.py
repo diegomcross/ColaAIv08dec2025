@@ -22,17 +22,13 @@ class RankingCog(commands.Cog):
         await self.bot.wait_until_ready()
         
         # --- FIX: AUTO-RESUME TRACKING ---
-        # Scans all voice channels on startup to catch users already online
         now = datetime.datetime.now(BR_TIMEZONE)
         restored_count = 0
         
         for guild in self.bot.guilds:
             for member in guild.members:
                 if member.bot: continue
-                
-                # Check if user is in voice right now
                 if member.voice and member.voice.channel:
-                    # Start their timer from NOW (we can't know when they joined before restart)
                     self.active_timers[member.id] = now
                     restored_count += 1
         
@@ -69,17 +65,8 @@ class RankingCog(commands.Cog):
             start_time = self.active_timers.pop(user_id)
             duration = (now - start_time).total_seconds() / 60
             if duration >= 1:
-                # Log session as invalid (0) or valid (1) based on conditions
-                # Since we check conditions on update, we log raw time here? 
-                # Actually, better to check validity at the end too.
-                # For simplicity, we assume sessions ending are logged as valid 
-                # only if they met criteria, but historical data is complex.
-                # Let's stick to your logic: Valid=0 on simple disconnect? 
-                # No, let's use check_validity_conditions logic if possible, 
-                # but member.voice is None here. 
-                # Defaulting to 0 (Invalid) for safety on simple disconnects without check 
-                # is conservative. Or we can assume 1. 
-                # Given previous logic, let's keep it safe.
+                # Log as potentially valid; validity checked by analysis usually, 
+                # but defaulting to 1 (valid) here for basic tracking continuity
                 await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=1)
 
     @commands.Cog.listener()
@@ -93,7 +80,7 @@ class RankingCog(commands.Cog):
 
         now = datetime.datetime.now(BR_TIMEZONE)
         
-        # 1. Sincroniza parciais (Checkpoints)
+        # 1. Sincroniza parciais
         for user_id, start_time in list(self.active_timers.items()):
             member = guild.get_member(user_id)
             if member and member.voice:
@@ -101,7 +88,6 @@ class RankingCog(commands.Cog):
                 if duration >= 1:
                     valid = 1 if self.check_validity_conditions(member) else 0
                     await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
-                    # Reset timer to NOW to avoid double counting
                     self.active_timers[user_id] = now
 
         # 2. Coleta dados
@@ -133,7 +119,7 @@ class RankingCog(commands.Cog):
 
             # Nome Limpo
             clean_name = utils.clean_voter_name(member.display_name)
-            clean_name = utils.strip_rank_prefix(clean_name) # Double check safety
+            clean_name = utils.strip_rank_prefix(clean_name)
             
             all_members_data.append({
                 'name': clean_name, 
@@ -152,13 +138,13 @@ class RankingCog(commands.Cog):
             k = p['rank_key']
             if k in ranks_config: ranks_config[k].append(p['name'])
 
-        # --- CABEÇALHOS DO BOARD ---
+        # --- CABEÇALHOS DO BOARD (UPDATED) ---
         HEADERS_MAP = {
-            'MESTRE': "🎖️ MESTRE",
+            'MESTRE': "🏆 MESTRE", # Changed to Trophy
             'LENDA': "⚡ LENDA",
             'ADEPTO': "✨ ADEPTO",
             'ATIVO': "🍌 ATIVOS",
-            'TURISTA': "😵‍💫 TURISTAS",
+            'TURISTA': "😵 TURISTAS",
             'INATIVO': "💤 INATIVOS"
         }
 
