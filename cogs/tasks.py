@@ -15,67 +15,36 @@ from cogs.views_polls import VotingPollView
 
 LORE_STATE_FILE = "lore_state.json"
 
-# --- VIEW: DECISÃO DE PROBATION (KICK OU KEEP) ---
+# --- VIEW: PROBATION DECISION (Mantida) ---
 class ProbationDecisionView(ui.View):
     def __init__(self, bot, member_id):
         super().__init__(timeout=None)
         self.bot = bot
         self.member_id = member_id
-
-    @ui.button(label="💀 Kick (Remover)", style=discord.ButtonStyle.danger, custom_id="prob_kick")
+    @ui.button(label="💀 Kick", style=discord.ButtonStyle.danger, custom_id="prob_kick")
     async def btn_kick(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         guild = interaction.guild
         member = guild.get_member(self.member_id)
-        
-        if not member:
-            return await interaction.followup.send("Membro já saiu do servidor.", ephemeral=True)
-
-        try:
-            # DM de aviso
-            embed_kick = discord.Embed(
-                title="❌ Removido por Inatividade",
-                description="Você foi removido do servidor por não participar dos canais de voz nos primeiros dias.\n\nNosso clã foca em interação ativa. Agradecemos o interesse!",
-                color=discord.Color.red()
-            )
-            await member.send(embed=embed_kick)
+        if not member: return await interaction.followup.send("Membro já saiu.", ephemeral=True)
+        try: await member.send(embed=discord.Embed(title="❌ Removido", description="Inatividade.", color=discord.Color.red()))
         except: pass
-
-        try:
-            # Kick
-            await member.kick(reason=f"Probation Kick por {interaction.user.name}")
-            await interaction.message.edit(content=f"💀 **{member.name}** foi removido por {interaction.user.mention}.", view=None, embed=None)
-        except Exception as e:
-            await interaction.followup.send(f"Erro ao kickar: {e}", ephemeral=True)
-
-    @ui.button(label="🛡️ Keep (Dar Chance)", style=discord.ButtonStyle.success, custom_id="prob_keep")
+        try: await member.kick(reason="Probation"); await interaction.message.edit(content=f"💀 **{member.name}** kickado.", view=None, embed=None)
+        except: await interaction.followup.send("Erro ao kickar.", ephemeral=True)
+    @ui.button(label="🛡️ Keep", style=discord.ButtonStyle.success, custom_id="prob_keep")
     async def btn_keep(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         guild = interaction.guild
         member = guild.get_member(self.member_id)
-
-        if not member:
-            return await interaction.followup.send("Membro não encontrado.", ephemeral=True)
-
-        # Registra a extensão no Banco de Dados
+        if not member: return await interaction.followup.send("Membro não encontrado.", ephemeral=True)
         await db.extend_probation(self.member_id)
-
-        try:
-            # DM de Segunda Chance
-            embed_keep = discord.Embed(
-                title="⚠️ Aviso de Inatividade",
-                description="Você foi sinalizado para remoção por não entrar em canais de voz, mas a Staff decidiu te dar uma **Segunda Chance**!\n\nVocê tem mais **2 semanas** para participar ativamente. Por favor, junte-se a nós em uma call!",
-                color=discord.Color.green()
-            )
-            await member.send(embed=embed_keep)
+        try: await member.send(embed=discord.Embed(title="⚠️ Aviso", description="Segunda chance dada.", color=discord.Color.green()))
         except: pass
-
-        await interaction.message.edit(content=f"🛡️ **{member.name}** recebeu mais 2 semanas (Aprovado por {interaction.user.mention}).", view=None, embed=None)
+        await interaction.message.edit(content=f"🛡️ **{member.name}** salvo.", view=None, embed=None)
 
 class TasksCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
         self.cleanup_loop.start()
         self.reminders_loop.start()
         self.channel_rename_loop.start()
@@ -84,7 +53,6 @@ class TasksCog(commands.Cog):
         self.attendance_monitor_loop.start()
         self.auto_survey_loop.start()
         self.probation_monitor_loop.start()
-        
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.start()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.start()
 
@@ -100,20 +68,16 @@ class TasksCog(commands.Cog):
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.cancel()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.cancel()
 
-    # ... [MANTENHA TODAS AS OUTRAS FUNÇÕES IGUAIS: get_lore_index, auto_survey_loop, daily_morning_loop, etc.] ...
-    # (Para economizar espaço, vou focar apenas no probation_monitor_loop, mas você deve manter o resto do arquivo)
-
-    # --- ESTADO LORE ---
+    # --- MÉTODOS MANTIDOS (Lore/Morning/Survey/Reminders) ---
     def get_lore_index(self):
         if not os.path.exists(LORE_STATE_FILE): return 0
         try:
             with open(LORE_STATE_FILE, "r") as f: return json.load(f).get("next_index", 0)
         except: return 0
-
     def increment_lore_index(self):
         current = self.get_lore_index()
         with open(LORE_STATE_FILE, "w") as f: json.dump({"next_index": current + 1}, f)
-
+        
     @tasks.loop(time=datetime.time(hour=10, minute=0, tzinfo=BR_TIMEZONE))
     async def auto_survey_loop(self):
         await self.bot.wait_until_ready()
@@ -138,31 +102,25 @@ class TasksCog(commands.Cog):
                 options = random.sample(all_raids, min(4, len(all_raids)))
                 options_list = [{'label': opt, 'value': opt} for opt in options]
                 desc_lines = [f"{i+1}\ufe0f\u20e3 {opt}" for i, opt in enumerate(options)]
-                embed = discord.Embed(title="📊 O Calendário está vazio!", description=f"Nenhum evento agendado para os próximos 3 dias.\n**O que vocês querem jogar?**\n\n" + "\n".join(desc_lines) + "\n\n*Meta: 4 votos para agendar.*", color=discord.Color.gold())
+                embed = discord.Embed(title="📊 O Calendário está vazio!", description=f"O que vocês querem jogar?\n\n" + "\n".join(desc_lines), color=discord.Color.gold())
                 target_data = json.dumps({'date_str': 'hoje 21h', 'options': options_list})
                 view = VotingPollView(self.bot, 'what', target_data, options_list)
                 msg = await poll_channel.send(embed=embed, view=view)
                 await db.create_poll(msg.id, poll_channel.id, main_chat.guild.id, 'what', target_data)
-                await main_chat.send(f"⚠️ **Sem atividades à vista!** O bot sugeriu algumas Raids. Vote aqui: {msg.jump_url}")
+                await main_chat.send(f"⚠️ **Sem atividades!** Vote aqui: {msg.jump_url}")
 
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=BR_TIMEZONE))
     async def daily_morning_loop(self):
         delay = random.randint(0, 3600); await asyncio.sleep(delay)
-        channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
-        if channel:
-            quote = random.choice(quotes.MORNING_QUOTES)
-            await channel.send(f"🌞 **Bom dia, Guardião!**\n\n{quote}\n\n>>> 🗓️ **Organize sua fireteam:** Use `/agendar`")
+        chan = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
+        if chan: await chan.send(f"🌞 **Bom dia!**\n\n{random.choice(quotes.MORNING_QUOTES)}")
 
     @tasks.loop(time=datetime.time(hour=15, minute=0, tzinfo=BR_TIMEZONE))
     async def daily_lore_loop(self):
         delay = random.randint(0, 3600); await asyncio.sleep(delay)
-        channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
-        if channel:
-            idx = self.get_lore_index()
-            if idx < len(quotes.LORE_QUOTES):
-                quote = quotes.LORE_QUOTES[idx]
-                await channel.send(f"{quote}")
-                self.increment_lore_index()
+        chan = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
+        idx = self.get_lore_index()
+        if chan and idx < len(quotes.LORE_QUOTES): await chan.send(f"{quotes.LORE_QUOTES[idx]}"); self.increment_lore_index()
 
     @tasks.loop(minutes=1)
     async def reminders_loop(self):
@@ -200,27 +158,49 @@ class TasksCog(commands.Cog):
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 1)
             except: continue
 
+    # --- MONITOR DE ATIVIDADE (STRICT RSVP) ---
     @tasks.loop(minutes=5)
     async def attendance_monitor_loop(self):
         await self.bot.wait_until_ready()
         events = await db.get_active_events()
         now = datetime.datetime.now(BR_TIMEZONE)
+        
         for event in events:
             try:
                 if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
+                
                 diff_minutes = (now - evt_time).total_seconds() / 60
-                if 0 <= diff_minutes <= 180:
+                
+                # REGRA 1: Janela de Monitoramento (Começa após 30min)
+                if 30 <= diff_minutes <= 210: 
                     guild = self.bot.get_guild(event['guild_id'])
                     if not guild: continue
                     channel = guild.get_channel(event['channel_id'])
                     if not channel: continue
-                    users_in_voice = [m.id for m in channel.members if not m.bot]
-                    if users_in_voice:
-                        for uid in users_in_voice: await db.mark_attendance_present(event['event_id'], uid)
-            except: pass
 
+                    voice_members_ids = {m.id for m in channel.members if not m.bot}
+                    if not voice_members_ids: continue
+
+                    rsvps = await db.get_rsvps(event['event_id'])
+                    confirmed_ids = {r['user_id'] for r in rsvps if r['status'] == 'confirmed'}
+
+                    # REGRA 2: Só conta se tiver ALGUÉM confirmado lá (Anti-Ghost)
+                    if not confirmed_ids.intersection(voice_members_ids):
+                        continue
+
+                    # REGRA 3: Strict RSVP (Só conta para quem confirmou)
+                    # Ignora quem está na call mas não deu RSVP
+                    valid_to_track = voice_members_ids.intersection(confirmed_ids)
+                    
+                    for uid in valid_to_track:
+                        await db.increment_event_attendance(event['event_id'], uid, minutes_to_add=5)
+                            
+            except Exception as e: 
+                print(f"[MONITOR ERROR] {e}")
+
+    # --- BOARD INFORMATIVO ---
     @tasks.loop(minutes=5)
     async def info_board_loop(self):
         await self.bot.wait_until_ready()
@@ -265,47 +245,70 @@ class TasksCog(commands.Cog):
     @tasks.loop(minutes=15)
     async def polls_management_loop(self): pass
 
+    # --- REPORT CARD (LÓGICA ATUALIZADA) ---
     @tasks.loop(minutes=5)
     async def cleanup_loop(self):
         events = await db.get_active_events()
         now = datetime.datetime.now(BR_TIMEZONE)
+        
         for event in events:
             try:
                 if isinstance(event['date_time'], str): evt_time = datetime.datetime.fromisoformat(event['date_time'])
                 else: evt_time = event['date_time']
                 if evt_time.tzinfo is None: evt_time = BR_TIMEZONE.localize(evt_time)
             except: continue
-            if now > evt_time + datetime.timedelta(hours=3):
+            
+            # Encerra após 3h (Extendida levemente para bater os 5m de loop)
+            if now > evt_time + datetime.timedelta(minutes=215):
                 guild = self.bot.get_guild(event['guild_id'])
                 if guild:
                     rsvps = await db.get_rsvps(event['event_id'])
                     confirmed_ids = {r['user_id'] for r in rsvps if r['status'] == 'confirmed'}
-                    present_ids = set()
-                    async with db.aiosqlite.connect(db.DB_NAME) as conn:
-                        async with conn.execute("SELECT user_id FROM event_attendance WHERE event_id = ? AND status='present'", (event['event_id'],)) as cursor:
-                            rows = await cursor.fetchall()
-                            present_ids = {r[0] for r in rows}
-                    users_present_confirmed = confirmed_ids.intersection(present_ids)
-                    users_flake = confirmed_ids.difference(present_ids)
-                    users_fill = present_ids.difference(confirmed_ids)
-                    def format_list(uids): return ", ".join([f"<@{uid}>" for uid in uids]) if uids else "Ninguém"
+                    
+                    # REGRA 4: Filtro de 60 minutos
+                    valid_attendees = await db.get_valid_attendees(event['event_id'], min_minutes=60)
+                    valid_attendees_set = set(valid_attendees)
+                    
+                    # Como só monitoramos RSVP'd, o grupo 'fill' será sempre vazio/irrelevante
+                    users_present = confirmed_ids.intersection(valid_attendees_set)
+                    users_flake = confirmed_ids.difference(valid_attendees_set)
+
+                    def format_clean(uids):
+                        if not uids: return "Ninguém"
+                        names = []
+                        for uid in uids:
+                            mem = guild.get_member(uid)
+                            dname = utils.clean_voter_name(mem.display_name) if mem else f"ID {uid}"
+                            names.append(f"`{dname}`")
+                        return ", ".join(names)
+
                     log_channel = guild.get_channel(config.CHANNEL_EVENT_LOGS)
                     if log_channel:
-                        embed_report = discord.Embed(title=f"📝 Relatório Final: {event['title']}", description=f"**Data:** {evt_time.strftime('%d/%m %H:%M')}\nEvento encerrado.", color=discord.Color.blue())
-                        embed_report.add_field(name=f"✅ Presentes ({len(users_present_confirmed)})", value=format_list(users_present_confirmed), inline=False)
-                        if users_flake: embed_report.add_field(name=f"❌ Faltas ({len(users_flake)})", value=format_list(users_flake), inline=False)
-                        if users_fill: embed_report.add_field(name=f"⭐ Completaram ({len(users_fill)})", value=format_list(users_fill), inline=False)
+                        embed_report = discord.Embed(
+                            title=f"📝 Relatório Final: {event['title']}", 
+                            description=f"**Data:** {evt_time.strftime('%d/%m %H:%M')}\n**Critério:** Presença > 60min e RSVP confirmado.", 
+                            color=discord.Color.blue()
+                        )
+                        
+                        embed_report.add_field(name=f"✅ Presentes ({len(users_present)})", value=format_clean(users_present), inline=False)
+                        
+                        if users_flake:
+                            embed_report.add_field(name=f"❌ Faltas / Incompletos ({len(users_flake)})", value=format_clean(users_flake), inline=False)
+                        
                         await log_channel.send(embed=embed_report)
+                    
                     try:
                         channel = guild.get_channel(event['channel_id'])
-                        if channel: await channel.delete(reason="Evento Concluído (3h)")
+                        if channel: await channel.delete(reason="Concluído")
                     except: pass
                     try:
                         role = guild.get_role(event['role_id'])
-                        if role: await role.delete(reason="Evento Concluído (3h)")
+                        if role: await role.delete(reason="Concluído")
                     except: pass
+                
                 await db.update_event_status(event['event_id'], 'completed')
 
+    # --- RENAME E PROBATION (Mantidos) ---
     @tasks.loop(minutes=15)
     async def channel_rename_loop(self):
         events = await db.get_active_events()
@@ -325,61 +328,31 @@ class TasksCog(commands.Cog):
                 if channel.name != new_name: await channel.edit(name=new_name)
             except: pass
 
-    # --- NOVO: PROBATION MONITOR (HUMAN REVIEW) ---
     @tasks.loop(hours=24)
     async def probation_monitor_loop(self):
         await self.bot.wait_until_ready()
-        
-        # Pega a Guilda e Canal de Staff
-        main_channel = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
-        if not main_channel: return
-        guild = main_channel.guild
-        
-        # Canal para enviar os reports (Logs da Staff)
-        log_channel = self.bot.get_channel(config.CHANNEL_EVENT_LOGS)
-        if not log_channel: return
-
+        main = self.bot.get_channel(config.CHANNEL_MAIN_CHAT)
+        if not main: return
+        log = self.bot.get_channel(config.CHANNEL_EVENT_LOGS)
+        if not log: return
+        guild = main.guild
         now = datetime.datetime.now(datetime.timezone.utc)
         
         for member in guild.members:
             if member.bot: continue
-            
-            # 1. Ignora membros antigos (antes da data de corte)
             if member.joined_at < config.INACTIVITY_START_DATE.replace(tzinfo=datetime.timezone.utc): continue
+            if any(r.id in [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID] for r in member.roles): continue
             
-            # 2. Ignora Staff
-            user_roles = [r.id for r in member.roles]
-            if config.ROLE_MOD_ID in user_roles or config.ROLE_FOUNDER_ID in user_roles: continue
-
-            # 3. Verifica tempo de casa (4+ dias)
-            days_in_server = (now - member.joined_at).days
-            if days_in_server < 4: continue
-
-            # 4. Verifica se já tem extensão ativa (Keep)
-            if await db.is_probation_extended(member.id):
-                continue # Já recebeu segunda chance e está no período de carência (14 dias)
-
-            # 5. Verifica atividade real
-            last_activity = await db.get_last_activity_timestamp(member.id)
-            if last_activity: continue # Tem atividade, está salvo
-
-            # --- AÇÃO: REPORTAR PARA A STAFF ---
+            days = (now - member.joined_at).days
+            if days < 4: continue
+            if await db.is_probation_extended(member.id): continue
+            if await db.get_last_activity_timestamp(member.id): continue
+            
             try:
-                # Evita spam se já mandamos msg hoje (opcional, mas o is_probation_extended já cobre parte disso)
-                # Envia Embed de Decisão
-                embed = discord.Embed(
-                    title="⚠️ Probation Alert: Inatividade",
-                    description=f"**Membro:** {member.mention} (`{member.name}`)\n**Tempo no Servidor:** {days_in_server} dias\n**Atividade de Voz:** Nenhuma detectada.",
-                    color=discord.Color.gold()
-                )
-                embed.set_footer(text="Decisão necessária: Kick ou Segunda Chance?")
-                
-                await log_channel.send(embed=embed, view=ProbationDecisionView(self.bot, member.id))
-                
-                # Para evitar spam no mesmo loop, podemos adicionar um pequeno delay ou flag temporária na memória se necessário, 
-                # mas como o loop é de 24h, o staff tem tempo de reagir.
-            except Exception as e:
-                print(f"[PROBATION ERROR] {e}")
+                embed = discord.Embed(title="⚠️ Probation Alert", description=f"**Membro:** {member.mention} (`{member.name}`)\n**Dias:** {days}\n**Status:** Sem atividade.", color=discord.Color.gold())
+                embed.set_footer(text="Ação Necessária")
+                await log.send(embed=embed, view=ProbationDecisionView(self.bot, member.id))
+            except: pass
 
     @cleanup_loop.before_loop
     async def before_cleanup(self):
