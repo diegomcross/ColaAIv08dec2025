@@ -34,7 +34,7 @@ async def init_db():
             )
         """)
         
-        # Migrações de Segurança (caso colunas não existam)
+        # Migrações de Segurança
         try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_1h_sent BOOLEAN DEFAULT 0")
         except: pass
         try: await db.execute("ALTER TABLE event_lifecycle ADD COLUMN reminder_4h_sent BOOLEAN DEFAULT 0")
@@ -48,7 +48,7 @@ async def init_db():
         
         await db.commit()
 
-# --- FUNÇÕES DE EVENTOS (CRÍTICAS) ---
+# --- FUNÇÕES DE EVENTOS ---
 
 async def create_event(data):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -100,7 +100,6 @@ async def get_rsvps(event_id):
 # --- ATTENDANCE & TRACKING ---
 
 async def increment_event_attendance(event_id, user_id, minutes_to_add=5):
-    """Adiciona minutos à contagem de um participante no evento."""
     now = datetime.datetime.now()
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("""
@@ -114,7 +113,6 @@ async def increment_event_attendance(event_id, user_id, minutes_to_add=5):
         await db.commit()
 
 async def get_valid_attendees(event_id, min_minutes=60):
-    """Retorna lista de user_ids que ficaram mais que 'min_minutes'."""
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT user_id FROM event_attendance WHERE event_id = ? AND minutes_active >= ?", (event_id, min_minutes)) as cursor:
@@ -122,8 +120,31 @@ async def get_valid_attendees(event_id, min_minutes=60):
             return [r['user_id'] for r in rows]
 
 async def mark_attendance_present(event_id, user_id):
-    # Wrapper de compatibilidade
     await increment_event_attendance(event_id, user_id, 5)
+
+async def get_attendance_status(event_id, user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT status FROM event_attendance WHERE event_id = ? AND user_id = ?", (event_id, user_id)) as cursor:
+            row = await cursor.fetchone()
+            return row['status'] if row else 'absent'
+
+async def get_event_stats_7d():
+    limit_date = datetime.datetime.now(BR_TIMEZONE) - datetime.timedelta(days=7)
+    stats = {}
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT creator_id, COUNT(*) as count FROM events WHERE date_time > ? GROUP BY creator_id", (limit_date,)) as cursor:
+            async for row in cursor:
+                uid = row['creator_id']
+                if uid not in stats: stats[uid] = {'created': 0, 'participated': 0}
+                stats[uid]['created'] = row['count']
+        async with db.execute("SELECT user_id, COUNT(*) as count FROM event_attendance WHERE first_seen_at > ? AND status='present' GROUP BY user_id", (limit_date,)) as cursor:
+            async for row in cursor:
+                uid = row['user_id']
+                if uid not in stats: stats[uid] = {'created': 0, 'participated': 0}
+                stats[uid]['participated'] = row['count']
+    return stats
 
 # --- CONFIGURAÇÕES ---
 
@@ -163,11 +184,9 @@ async def get_sessions_in_range(user_id, days_back):
 async def get_last_activity_timestamp(user_id):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
-        # Checa voz
         async with db.execute("SELECT MAX(start_time) as last_voice FROM voice_sessions WHERE user_id = ?", (user_id,)) as c:
             voice_row = await c.fetchone()
             last_voice = voice_row['last_voice'] if voice_row else None
-        # Checa eventos
         async with db.execute("SELECT MAX(first_seen_at) as last_event FROM event_attendance WHERE user_id = ?", (user_id,)) as c:
             event_row = await c.fetchone()
             last_event = event_row['last_event'] if event_row else None
@@ -175,7 +194,7 @@ async def get_last_activity_timestamp(user_id):
         if not last_voice and not last_event: return None
         if not last_voice: return last_event
         if not last_event: return last_voice
-        return max(str(last_voice), str(last_event)) # Comparação simples de string ISO
+        return max(str(last_voice), str(last_event))
 
 async def prune_old_voice_data(days=90):
     limit_date = datetime.datetime.now(BR_TIMEZONE) - datetime.timedelta(days=days)
@@ -257,6 +276,11 @@ async def set_lifecycle_flag(event_id, flag_name, value=1):
         await db.execute(query, (value, event_id))
         await db.commit()
 
+async def reset_event_lifecycle_flags(event_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE event_lifecycle SET maybe_alert_sent = 0, start_alert_sent = 0, late_report_sent = 0, reminder_1h_sent = 0, reminder_4h_sent = 0, reminder_24h_sent = 0 WHERE event_id = ?", (event_id,))
+        await db.commit()
+
 # --- WEEKLY MASTER ---
 
 async def log_master_winner(user_id):
@@ -296,14 +320,12 @@ async def remove_pending_join(user_id):
         await db.commit()
 
 async def extend_probation(user_id):
-    """Dá uma segunda chance (timestamp)."""
     async with aiosqlite.connect(DB_NAME) as db:
         now = datetime.datetime.now()
         await db.execute("INSERT OR REPLACE INTO probation_extensions (user_id, extended_at) VALUES (?, ?)", (user_id, now))
         await db.commit()
 
 async def is_probation_extended(user_id):
-    """Checa se tem extensão ativa (< 14 dias)."""
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT extended_at FROM probation_extensions WHERE user_id = ?", (user_id,)) as cursor:
