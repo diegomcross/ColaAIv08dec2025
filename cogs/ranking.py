@@ -63,6 +63,7 @@ class RankingCog(commands.Cog):
 
         now = datetime.datetime.now(BR_TIMEZONE)
         
+        # 1. Sincroniza parciais
         for user_id, start_time in list(self.active_timers.items()):
             member = guild.get_member(user_id)
             if member and member.voice:
@@ -72,6 +73,7 @@ class RankingCog(commands.Cog):
                     await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
                     self.active_timers[user_id] = now
 
+        # 2. Coleta dados
         data_7d = await db.get_voice_hours(7)
         hours_map = {r['user_id']: r['total_mins']/60 for r in data_7d}
         
@@ -79,11 +81,12 @@ class RankingCog(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
-            # --- FILTRO STAFF (FIXED) ---
+            # --- FILTRO STAFF ---
             staff_roles = [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID, config.ROLE_ADMIN_ID]
             if any(r.id in staff_roles for r in member.roles): 
                 continue
 
+            # Determina Rank
             if member.get_role(config.ROLE_INATIVO):
                 rank_key = 'INATIVO'
                 h7 = 0
@@ -97,17 +100,27 @@ class RankingCog(commands.Cog):
                 elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_key = 'ATIVO'
                 else: rank_key = 'TURISTA'
 
-            clean_name = utils.clean_voter_name(member.display_name)
+            # Nome Limpo (Sem Prefixo)
+            clean_name = utils.strip_rank_prefix(member.display_name)
             
-            all_members_data.append({'name': clean_name, 'h7': h7, 'rank_key': rank_key})
+            all_members_data.append({
+                'name': clean_name, 
+                'h7': h7, 
+                'rank_key': rank_key
+            })
 
         all_members_data.sort(key=lambda x: x['h7'], reverse=True)
 
-        ranks_config = {'MESTRE': [], 'LENDA': [], 'ADEPTO': [], 'ATIVO': [], 'TURISTA': [], 'INATIVO': []}
+        ranks_config = {
+            'MESTRE': [], 'LENDA': [], 'ADEPTO': [], 
+            'ATIVO': [], 'TURISTA': [], 'INATIVO': []
+        }
+
         for p in all_members_data:
             k = p['rank_key']
             if k in ranks_config: ranks_config[k].append(p['name'])
 
+        # --- CABEÇALHOS DO BOARD ---
         HEADERS_MAP = {
             'MESTRE': "🎖️ MESTRE",
             'LENDA': "⚡ LENDA",
@@ -119,6 +132,7 @@ class RankingCog(commands.Cog):
 
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
         
+        # MESTRE (Full Width)
         masters = ranks_config['MESTRE']
         header_mestre = HEADERS_MAP['MESTRE']
         if masters:
@@ -127,25 +141,27 @@ class RankingCog(commands.Cog):
         else:
             embed.description = f"### {header_mestre}\n> *O trono está vazio...*"
 
+        # TIERS INTERMEDIÁRIOS (Side by Side)
         mid_tiers = ['LENDA', 'ADEPTO']
         for key in mid_tiers:
             names = ranks_config[key]
             title = HEADERS_MAP[key]
+            # Use \n for vertical list
             value = "\n".join([f"`{n}`" for n in names]) if names else "*Vazio*"
+            if len(value) > 1000: value = value[:900] + "..." # Prevent overflow
             embed.add_field(name=f"{title} ({len(names)})", value=value, inline=True)
         
-        embed.add_field(name="\u200b", value="\u200b", inline=False)
+        embed.add_field(name="\u200b", value="\u200b", inline=False) # Spacer
 
-        low_tiers = ['ATIVO', 'TURISTA', 'INATIVO']
+        # TIERS INFERIORES (Side by Side: Ativo vs Turista)
+        low_tiers = ['ATIVO', 'TURISTA']
         for key in low_tiers:
             names = ranks_config[key]
             title = HEADERS_MAP[key]
-            if names:
-                formatted_names = [f"`{n}`" for n in names]
-                value = ", ".join(formatted_names)
-                if len(value) > 1000: value = value[:950] + "..."
-            else: value = "*Ninguém*"
-            embed.add_field(name=f"{title} ({len(names)})", value=value, inline=False)
+            # Use \n for vertical list
+            value = "\n".join([f"`{n}`" for n in names]) if names else "*Vazio*"
+            if len(value) > 1000: value = value[:900] + "..." # Prevent overflow
+            embed.add_field(name=f"{title} ({len(names)})", value=value, inline=True)
 
         embed.add_field(name="⠀", value="🎙️ **Suba de Rank:** Entre em calls com grupo, áudio aberto e fale!", inline=False)
         if guild.icon: embed.set_thumbnail(url=guild.icon.url)
