@@ -6,7 +6,8 @@ import re
 from typing import Tuple, Optional
 from constants import (
     BR_TIMEZONE, RAID_INFO_PT, MASMORRA_INFO_PT, PVP_ACTIVITY_INFO_PT,
-    DIAS_SEMANA_PT_SHORT, ACTIVITY_EMOJIS, ACTIVITY_MODES, CHANNEL_NAME_MAPPINGS
+    DIAS_SEMANA_PT_SHORT, ACTIVITY_EMOJIS, ACTIVITY_MODES, CHANNEL_NAME_MAPPINGS,
+    RANK_STYLE
 )
 
 # --- UTILITÁRIOS DE USUÁRIO ---
@@ -21,20 +22,22 @@ async def get_user_display_name_static(user_id: int, bot: discord.Client, guild:
     except: return f"User"
 
 def clean_voter_name(display_name: str) -> str:
-    """
-    Limpa o nome para exibição (Ranking/Logs).
-    Mantém números e letras, remove apenas o discriminador (#1234) se houver.
-    """
+    """Limpa discriminadores (#1234) e espaços."""
     if not display_name: return "User"
-    
-    # Remove discriminador clássico do Discord (ex: Nome#1234)
     name_part = display_name.split('#')[0]
-    
-    # Remove espaços extras
-    cleaned = name_part.strip()
-    
-    # Se o nome ficou vazio (ex: só tinha espaços), usa um fallback ou o original
-    return cleaned if cleaned else "User"
+    return name_part.strip() or "User"
+
+def strip_rank_prefix(display_name: str) -> str:
+    """Remove APENAS os prefixos de rank definidos em constants.py."""
+    clean = display_name
+    # Itera sobre os valores do RANK_STYLE (ex: "🍌 ", "⚡ LENDA ")
+    for prefix in RANK_STYLE.values():
+        if prefix and clean.startswith(prefix):
+            # Remove o prefixo e espaços extras resultantes
+            clean = clean[len(prefix):].strip()
+            break
+    # Remove discriminadores caso sobrem
+    return clean.split('#')[0].strip()
 
 # --- UTILITÁRIOS DE DATA E EVENTO ---
 
