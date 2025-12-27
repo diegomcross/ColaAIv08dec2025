@@ -15,6 +15,32 @@ from cogs.views_polls import VotingPollView
 
 LORE_STATE_FILE = "lore_state.json"
 
+class ProbationDecisionView(ui.View):
+    def __init__(self, bot, member_id):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.member_id = member_id
+    @ui.button(label="💀 Kick", style=discord.ButtonStyle.danger, custom_id="prob_kick")
+    async def btn_kick(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        guild = interaction.guild
+        member = guild.get_member(self.member_id)
+        if not member: return await interaction.followup.send("Membro já saiu.", ephemeral=True)
+        try: await member.send(embed=discord.Embed(title="❌ Removido", description="Inatividade.", color=discord.Color.red()))
+        except: pass
+        try: await member.kick(reason="Probation"); await interaction.message.edit(content=f"💀 **{member.name}** kickado.", view=None, embed=None)
+        except: await interaction.followup.send("Erro ao kickar.", ephemeral=True)
+    @ui.button(label="🛡️ Keep", style=discord.ButtonStyle.success, custom_id="prob_keep")
+    async def btn_keep(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        guild = interaction.guild
+        member = guild.get_member(self.member_id)
+        if not member: return await interaction.followup.send("Membro não encontrado.", ephemeral=True)
+        await db.extend_probation(self.member_id)
+        try: await member.send(embed=discord.Embed(title="⚠️ Aviso", description="Segunda chance dada.", color=discord.Color.green()))
+        except: pass
+        await interaction.message.edit(content=f"🛡️ **{member.name}** salvo.", view=None, embed=None)
+
 class TasksCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -41,7 +67,6 @@ class TasksCog(commands.Cog):
         if hasattr(self, 'polls_management_loop'): self.polls_management_loop.cancel()
         if hasattr(self, 'info_board_loop'): self.info_board_loop.cancel()
 
-    # --- MÉTODOS MANTIDOS (Lore/Morning/Survey) ---
     def get_lore_index(self):
         if not os.path.exists(LORE_STATE_FILE): return 0
         try:
@@ -95,7 +120,6 @@ class TasksCog(commands.Cog):
         idx = self.get_lore_index()
         if chan and idx < len(quotes.LORE_QUOTES): await chan.send(f"{quotes.LORE_QUOTES[idx]}"); self.increment_lore_index()
 
-    # --- LOOP: LEMBRETES, DMs E STATUS ---
     @tasks.loop(minutes=1)
     async def reminders_loop(self):
         await self.bot.wait_until_ready()
@@ -131,17 +155,14 @@ class TasksCog(commands.Cog):
                 event_channel = guild.get_channel(event['channel_id'])
                 role = guild.get_role(event['role_id'])
 
-                # 24H
                 if 1430 <= diff_minutes <= 1450 and has_slots:
                      if not lifecycle.get('reminder_24h_sent'):
                          if main_chat: await main_chat.send(f"📢 **Atenção Guardiões!**\nA atividade **{event['title']}** é amanhã! Ainda há vagas. {event_channel.mention}")
                          await db.set_lifecycle_flag(event['event_id'], 'reminder_24h_sent', 1)
-                # 4H
                 if 235 <= diff_minutes <= 245 and has_slots:
                     if not lifecycle.get('reminder_4h_sent'):
                         if main_chat: await main_chat.send(f"📢 **Vagas Abertas!** **{event['title']}** começa em 4h! {event_channel.mention}")
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_4h_sent', 1)
-                # 1H (WAKE UP)
                 if 50 <= diff_minutes <= 65:
                     if not lifecycle.get('reminder_1h_sent'):
                         if event_channel and role: await event_channel.send(f"{role.mention} ⏰ O evento começa em 1 hora!")
@@ -154,7 +175,6 @@ class TasksCog(commands.Cog):
                                 if member: await member.send(embed=discord.Embed(title=f"⏰ Lembrete: {event['title']}", description="Começa em **1 hora**.", color=discord.Color.orange()))
                             except: pass
                         await db.set_lifecycle_flag(event['event_id'], 'reminder_1h_sent', 1)
-                # START (SUMMONING)
                 if -2 <= diff_minutes <= 5:
                     if not lifecycle.get('start_alert_sent'):
                         for uid in confirmed_users:
@@ -174,7 +194,6 @@ class TasksCog(commands.Cog):
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.custom, name="🛡️ Patrulhando a Torre"))
         except: pass
 
-    # --- MONITOR STRICT RSVP ---
     @tasks.loop(minutes=5)
     async def attendance_monitor_loop(self):
         await self.bot.wait_until_ready()
@@ -199,19 +218,57 @@ class TasksCog(commands.Cog):
                     rsvps = await db.get_rsvps(event['event_id'])
                     confirmed_ids = {r['user_id'] for r in rsvps if r['status'] == 'confirmed'}
                     
-                    # Só processa se tiver algum confirmado na sala
                     if not confirmed_ids.intersection(voice_ids): continue
                     
-                    # Strict: Só conta tempo para quem confirmou
                     valid_track = voice_ids.intersection(confirmed_ids)
                     for uid in valid_track:
                         await db.increment_event_attendance(event['event_id'], uid, 5)
             except: pass
 
+    @tasks.loop(minutes=5)
+    async def info_board_loop(self):
+        await self.bot.wait_until_ready()
+        try:
+            sched_channel = self.bot.get_channel(config.CHANNEL_SCHEDULE)
+            if sched_channel:
+                instr_msg, list_msg = None, None
+                async for msg in sched_channel.history(limit=20):
+                    if msg.author == self.bot.user:
+                        if msg.embeds and msg.embeds[0].title == "📅 Agendamento de Grades": instr_msg = msg
+                        elif msg.embeds and msg.embeds[0].title == "📋 Próximas Atividades": list_msg = msg
+                embed_instr = discord.Embed(title="📅 Agendamento de Grades", description="Veja abaixo os eventos já marcados.\n\n**Quer criar o seu?**\nUse o comando `/agendar` no bate-papo!", color=discord.Color.green())
+                if not instr_msg: await sched_channel.send(embed=embed_instr)
+                events = await db.get_active_events()
+                valid_events = []
+                for evt in events:
+                    try:
+                        if isinstance(evt['date_time'], str): dt = datetime.datetime.fromisoformat(evt['date_time'])
+                        else: dt = evt['date_time']
+                        if dt.tzinfo is None: dt = BR_TIMEZONE.localize(dt)
+                        rsvps = await db.get_rsvps(evt['event_id'])
+                        confirmed = len([r for r in rsvps if r['status'] == 'confirmed'])
+                        valid_events.append({'dt': dt, 'title': evt['title'], 'slots': evt['max_slots'], 'confirmed': confirmed, 'channel_id': evt['channel_id']})
+                    except: continue
+                valid_events.sort(key=lambda x: x['dt'])
+                if not valid_events: desc_list = "*Nenhum evento agendado no momento.*"
+                else:
+                    lines = []
+                    for e in valid_events:
+                        ts = int(e['dt'].timestamp())
+                        free = max(0, e['slots'] - e['confirmed'])
+                        status_emoji = "🟢" if free > 0 else "🔴"
+                        chan_link = f"<#{e['channel_id']}>" if e['channel_id'] else "Canal deletado"
+                        lines.append(f"{status_emoji} **<t:{ts}:d> <t:{ts}:t>** | {chan_link}\n└ **{e['title']}** ({free} vagas)")
+                    desc_list = "\n\n".join(lines)
+                embed_list = discord.Embed(title="📋 Próximas Atividades", description=desc_list, color=discord.Color.blue())
+                embed_list.set_footer(text=f"Atualizado em {datetime.datetime.now(BR_TIMEZONE).strftime('%H:%M')}")
+                if list_msg: await list_msg.edit(embed=embed_list)
+                else: await sched_channel.send(embed=embed_list)
+        except: pass
+
     @tasks.loop(minutes=15)
     async def polls_management_loop(self): pass
 
-    # --- REPORT CARD (STRICT + NO MENTIONS) ---
     @tasks.loop(minutes=5)
     async def cleanup_loop(self):
         events = await db.get_active_events()
@@ -241,7 +298,7 @@ class TasksCog(commands.Cog):
                         for uid in uids:
                             mem = guild.get_member(uid)
                             dname = utils.clean_voter_name(mem.display_name) if mem else f"ID {uid}"
-                            names.append(f"`{dname}`") # Code Block
+                            names.append(f"`{dname}`")
                         return ", ".join(names)
 
                     log_channel = guild.get_channel(config.CHANNEL_EVENT_LOGS)
@@ -292,7 +349,11 @@ class TasksCog(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             if member.joined_at < config.INACTIVITY_START_DATE.replace(tzinfo=datetime.timezone.utc): continue
-            if any(r.id in [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID] for r in member.roles): continue
+            
+            # FIX: Added ROLE_ADMIN_ID
+            staff_roles = [config.ROLE_MOD_ID, config.ROLE_FOUNDER_ID, config.ROLE_ADMIN_ID]
+            if any(r.id in staff_roles for r in member.roles): continue
+            
             days = (now - member.joined_at).days
             if days < 4: continue
             if await db.is_probation_extended(member.id): continue
@@ -300,7 +361,7 @@ class TasksCog(commands.Cog):
             
             try:
                 embed = discord.Embed(title="⚠️ Probation Alert", description=f"**Membro:** {member.mention} (`{member.name}`)\n**Dias:** {days}\n**Status:** Sem atividade.", color=discord.Color.gold())
-                from cogs.tasks import ProbationDecisionView # Local import safely
+                # Removed dangerous local import
                 await log_channel.send(embed=embed, view=ProbationDecisionView(self.bot, member.id))
             except: pass
 
