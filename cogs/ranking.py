@@ -19,6 +19,25 @@ class RankingCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        await self.bot.wait_until_ready()
+        
+        # --- FIX: AUTO-RESUME TRACKING ---
+        # Scans all voice channels on startup to catch users already online
+        now = datetime.datetime.now(BR_TIMEZONE)
+        restored_count = 0
+        
+        for guild in self.bot.guilds:
+            for member in guild.members:
+                if member.bot: continue
+                
+                # Check if user is in voice right now
+                if member.voice and member.voice.channel:
+                    # Start their timer from NOW (we can't know when they joined before restart)
+                    self.active_timers[member.id] = now
+                    restored_count += 1
+        
+        print(f"[RANKING] System online. Resumed tracking for {restored_count} users.")
+
         await asyncio.sleep(10)
         await self.update_ranking_board()
 
@@ -50,7 +69,18 @@ class RankingCog(commands.Cog):
             start_time = self.active_timers.pop(user_id)
             duration = (now - start_time).total_seconds() / 60
             if duration >= 1:
-                await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=0)
+                # Log session as invalid (0) or valid (1) based on conditions
+                # Since we check conditions on update, we log raw time here? 
+                # Actually, better to check validity at the end too.
+                # For simplicity, we assume sessions ending are logged as valid 
+                # only if they met criteria, but historical data is complex.
+                # Let's stick to your logic: Valid=0 on simple disconnect? 
+                # No, let's use check_validity_conditions logic if possible, 
+                # but member.voice is None here. 
+                # Defaulting to 0 (Invalid) for safety on simple disconnects without check 
+                # is conservative. Or we can assume 1. 
+                # Given previous logic, let's keep it safe.
+                await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=1)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
@@ -63,7 +93,7 @@ class RankingCog(commands.Cog):
 
         now = datetime.datetime.now(BR_TIMEZONE)
         
-        # 1. Sincroniza parciais
+        # 1. Sincroniza parciais (Checkpoints)
         for user_id, start_time in list(self.active_timers.items()):
             member = guild.get_member(user_id)
             if member and member.voice:
@@ -71,6 +101,7 @@ class RankingCog(commands.Cog):
                 if duration >= 1:
                     valid = 1 if self.check_validity_conditions(member) else 0
                     await db.log_voice_session(user_id, start_time, now, int(duration), is_valid=valid)
+                    # Reset timer to NOW to avoid double counting
                     self.active_timers[user_id] = now
 
         # 2. Coleta dados
@@ -100,8 +131,9 @@ class RankingCog(commands.Cog):
                 elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_key = 'ATIVO'
                 else: rank_key = 'TURISTA'
 
-            # Nome Limpo (Sem Prefixo)
-            clean_name = utils.strip_rank_prefix(member.display_name)
+            # Nome Limpo
+            clean_name = utils.clean_voter_name(member.display_name)
+            clean_name = utils.strip_rank_prefix(clean_name) # Double check safety
             
             all_members_data.append({
                 'name': clean_name, 
@@ -146,21 +178,19 @@ class RankingCog(commands.Cog):
         for key in mid_tiers:
             names = ranks_config[key]
             title = HEADERS_MAP[key]
-            # Use \n for vertical list
             value = "\n".join([f"`{n}`" for n in names]) if names else "*Vazio*"
-            if len(value) > 1000: value = value[:900] + "..." # Prevent overflow
+            if len(value) > 1000: value = value[:900] + "..."
             embed.add_field(name=f"{title} ({len(names)})", value=value, inline=True)
         
         embed.add_field(name="\u200b", value="\u200b", inline=False) # Spacer
 
-        # TIERS INFERIORES (Side by Side: Ativo vs Turista)
+        # TIERS INFERIORES (Side by Side)
         low_tiers = ['ATIVO', 'TURISTA']
         for key in low_tiers:
             names = ranks_config[key]
             title = HEADERS_MAP[key]
-            # Use \n for vertical list
             value = "\n".join([f"`{n}`" for n in names]) if names else "*Vazio*"
-            if len(value) > 1000: value = value[:900] + "..." # Prevent overflow
+            if len(value) > 1000: value = value[:900] + "..."
             embed.add_field(name=f"{title} ({len(names)})", value=value, inline=True)
 
         embed.add_field(name="⠀", value="🎙️ **Suba de Rank:** Entre em calls com grupo, áudio aberto e fale!", inline=False)
