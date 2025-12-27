@@ -82,23 +82,25 @@ class RankingCog(commands.Cog):
             if member.bot: continue
             if any(r.id in [config.ROLE_FOUNDER_ID, config.ROLE_MOD_ID] for r in member.roles): continue
 
-            # LÓGICA DE HIERARQUIA ATUALIZADA
+            # LÓGICA ATUALIZADA: Mestre Exclusivo por Cargo
             if member.get_role(config.ROLE_INATIVO):
                 rank_key = 'INATIVO'
                 h7 = 0
+            elif member.get_role(config.ROLE_MESTRE_ID):
+                # Somente quem tem o cargo vira Mestre aqui, independente das horas
+                rank_key = 'MESTRE'
+                h7 = hours_map.get(member.id, 0)
             else:
                 h7 = hours_map.get(member.id, 0)
-                if h7 >= RANK_THRESHOLDS['MESTRE']: rank_key = 'MESTRE'
-                elif h7 >= RANK_THRESHOLDS['ADEPTO']: rank_key = 'ADEPTO'
+                # Removemos a verificação if h7 >= MESTRE. 
+                # Se tiver 100 horas mas não tem cargo, cai no Adepto.
+                if h7 >= RANK_THRESHOLDS['ADEPTO']: rank_key = 'ADEPTO'
                 elif h7 >= RANK_THRESHOLDS['LENDA']: rank_key = 'LENDA'
                 elif h7 >= RANK_THRESHOLDS['ATIVO']: rank_key = 'ATIVO'
                 elif h7 >= RANK_THRESHOLDS['TURISTA']: rank_key = 'TURISTA'
-                else: rank_key = 'TURISTA' # Fallback para < 2h
+                else: rank_key = 'TURISTA'
 
-            # Pega o Título Visual do constants.py (ex: "⚔️ ADEPTO")
             display_title = RANK_STYLE.get(rank_key, "")
-            
-            # Limpa o nome para o display (remove emojis antigos se já tiver)
             clean_name = utils.clean_voter_name(member.display_name)
             
             all_members_data.append({
@@ -110,26 +112,18 @@ class RankingCog(commands.Cog):
 
         all_members_data.sort(key=lambda x: x['h7'], reverse=True)
 
-        # 3. Agrupamento
-        # Note: Usamos as chaves do RANK_STYLE para agrupar
         ranks_config = {
-            'MESTRE': [],
-            'ADEPTO': [],
-            'LENDA': [],
-            'ATIVO': [],
-            'TURISTA': [],
-            'INATIVO': []
+            'MESTRE': [], 'ADEPTO': [], 'LENDA': [],
+            'ATIVO': [], 'TURISTA': [], 'INATIVO': []
         }
 
         for p in all_members_data:
             k = p['rank_key']
-            if k in ranks_config:
-                ranks_config[k].append(p['name'])
+            if k in ranks_config: ranks_config[k].append(p['name'])
 
         # 4. Construção do Embed
         embed = discord.Embed(title="🏆  QUADRO DE HONRA (7 Dias)", color=discord.Color.gold())
         
-        # MESTRE
         masters = ranks_config['MESTRE']
         if masters:
             master_str = "\n".join([f"> 👑 **{name}**" for name in masters])
@@ -137,7 +131,6 @@ class RankingCog(commands.Cog):
         else:
             embed.description = f"### {RANK_STYLE['MESTRE']}\n> *O trono está vazio...*"
 
-        # TIERS ELITE (Vertical)
         mid_tiers = ['ADEPTO', 'LENDA']
         for key in mid_tiers:
             names = ranks_config[key]
@@ -147,19 +140,15 @@ class RankingCog(commands.Cog):
         
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
-        # TIERS COMUNS (Horizontal)
         low_tiers = ['ATIVO', 'TURISTA', 'INATIVO']
         for key in low_tiers:
             names = ranks_config[key]
             title = RANK_STYLE[key]
-            
             if names:
                 formatted_names = [f"`{n}`" for n in names]
                 value = ", ".join(formatted_names)
                 if len(value) > 1000: value = value[:950] + "..."
-            else:
-                value = "*Ninguém*"
-            
+            else: value = "*Ninguém*"
             embed.add_field(name=f"{title} ({len(names)})", value=value, inline=False)
 
         embed.add_field(name="⠀", value="🎙️ **Suba de Rank:** Entre em calls com grupo, áudio aberto e fale!", inline=False)
@@ -171,8 +160,7 @@ class RankingCog(commands.Cog):
             try:
                 last_msg = None
                 async for msg in channel.history(limit=10):
-                    if msg.author == self.bot.user:
-                        last_msg = msg; break
+                    if msg.author == self.bot.user: last_msg = msg; break
                 if last_msg: await last_msg.edit(embed=embed)
                 else: await channel.send(embed=embed)
             except: pass
