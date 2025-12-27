@@ -21,8 +21,9 @@ class RolesManager(commands.Cog):
     async def on_ready(self):
         """Força atualização de cargos e nomes assim que o bot liga."""
         await self.bot.wait_until_ready()
-        print("[ROLES] Iniciando sincronização (Modo Seguro - Anti Rate Limit)...")
-        await self.sync_member_ranks()
+        print("[ROLES] Iniciando sincronização (Modo Seguro - Delay 2.0s)...")
+        # Roda em background para não bloquear o bot
+        asyncio.create_task(self.sync_member_ranks())
 
     async def sync_member_ranks(self):
         if not self.bot.guilds: return
@@ -42,10 +43,10 @@ class RolesManager(commands.Cog):
         for member in guild.members:
             if member.bot: continue
             
-            # --- CRÍTICO: DELAY PARA EVITAR 429 ---
-            await asyncio.sleep(1.5)
+            # --- CRÍTICO: DELAY ALTO PARA EVITAR 429 ---
+            await asyncio.sleep(2.0)
 
-            # Ignora Staff (Opcional: Limpar cargos deles)
+            # Ignora Staff
             if any(r.id in staff_roles for r in member.roles):
                 await self.remove_role(member, "ADEPTO ✨")
                 await self.remove_role(member, "LENDA ⚡")
