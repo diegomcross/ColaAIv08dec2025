@@ -28,21 +28,46 @@ def clean_voter_name(display_name: str) -> str:
     return name_part.strip() or "User"
 
 def strip_rank_prefix(display_name: str) -> str:
-    """Remove RECURSIVAMENTE todos os prefixos de rank conhecidos."""
-    clean = display_name.split('#')[0].strip() # Remove #1234 primeiro
+    """
+    Remove agressivamente qualquer prefixo de rank (atual ou legado/bugado).
+    """
+    # Lista de 'Lixo' para remover do início do nome
+    # Inclui versões quebradas, antigas e novas
+    garbage_list = [
+        "🎖️ MESTRE", "⚡ LENDA", "✨ ADEPTO", "🍌", "😵‍💫 TURISTA", "💤", 
+        "😵💫 TURISTA", "⚠ TURISTA", "⚠️ TURISTA", "⚔️ ADEPTO", "⚡ VANGUARDA", "💠 LENDA",
+        "🟢", "User", "Mestre", "Adepto", "Turista", "Lenda", "Vanguarda",
+        "😵", "💫", "⚠", "⚠️", "⚔️", "✨", "⚡" # Emojis soltos
+    ]
     
-    # Lista de prefixos para remover (inclui versões antigas se necessário)
-    prefixes_to_remove = list(RANK_STYLE.values()) + ["⚠️ TURISTA", "🟢", "⚔️ ADEPTO", "⚡ VANGUARDA"]
+    clean = display_name.split('#')[0].strip()
     
+    # Loop de Limpeza Recursiva
+    # Continua limpando até que o nome não comece com nenhum lixo
     changed = True
     while changed:
         changed = False
-        for prefix in prefixes_to_remove:
-            if prefix and clean.startswith(prefix):
-                clean = clean[len(prefix):].strip()
-                changed = True # Se mudou, repete o loop para pegar prefixos duplos
+        for trash in garbage_list:
+            # Verifica se começa com o lixo (ignorando case para texto)
+            if clean.lower().startswith(trash.lower()):
+                # Remove o lixo (tamanho exato do que foi encontrado)
+                # Mas precisamos remover da string original para manter o Case do nome do usuário
+                if clean.startswith(trash):
+                    clean = clean[len(trash):].strip()
+                else:
+                    # Fallback para caso de case insensitive (raro em emojis, mas bom pra texto)
+                    clean = clean[len(trash):].strip()
+                changed = True
+        
+        # Limpeza extra de símbolos soltos no início que podem ter sobrado
+        if clean and not clean[0].isalnum():
+            # Remove caracteres não alfanuméricos do início (ex: "- ", "| ")
+            clean = re.sub(r'^[^a-zA-Z0-9]+', '', clean).strip()
+            # Se removeu algo, marca changed para verificar garbage_list de novo
+            # (ex: "- 🍌 Name" -> "🍌 Name" -> "Name")
+            # Mas cuidado com loop infinito, então só faz regex simples
     
-    return clean
+    return clean if clean else "User"
 
 # --- UTILITÁRIOS DE DATA E EVENTO ---
 
