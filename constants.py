@@ -96,8 +96,8 @@ RANK_THRESHOLDS = {
     'MESTRE': 20,
     'LENDA': 10,     # Substitui Vanguarda
     'ADEPTO': 6,     # Reduzido de 15 para 6 (Acessível)
-    'ATIVO': 5,      # Reduzido de 5 para 2 (Menos Turistas)
-    'TURISTA': 2,    # Fallback (< 2h)
+    'ATIVO': 2,      # Reduzido de 5 para 2 (Menos Turistas)
+    'TURISTA': 0,    # Fallback (< 2h)
 }
 
 # --- ESTILO DOS NICKNAMES ---
